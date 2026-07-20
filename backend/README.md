@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.2
+# RIFTLESS Backend — Phase F6.3
 
 Backend control-plane for RIFTLESS.
 
@@ -22,14 +22,14 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | Shared fingerprint consistency check | Implemented (F5.2) |
 | `POST /api/v1/runs/analyze` (sync orchestration) | Implemented (F5.3) |
 | Validation domain contracts (schemas + aggregation) | Implemented (F6.1) |
-| SQLGlot SQL parse validator (`sql_parse`) | **Implemented (F6.2)** |
+| SQLGlot SQL parse validator (`sql_parse`) | Implemented (F6.2) |
+| DuckDB in-memory rename validator (`duckdb_execution`) | **Implemented (F6.3)** |
 | Validation HTTP endpoint | **Not implemented** |
-| DuckDB execution validator | **Not implemented** |
 | dbt validation executor | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
-| Remediation / SQL execution / production mutation | **Not implemented** |
+| Remediation / production SQL mutation | **Not implemented** |
 | Database / ORM / migrations / persistence | **Not implemented** |
 | Authentication / authorization | **Not implemented** |
 | DeepSeek / Gemini | **Not implemented** |
@@ -65,15 +65,18 @@ backend/
 │   │   ├── risk.py
 │   │   ├── runs.py
 │   │   ├── validation.py           # F6.1 validation contracts
-│   │   └── sql_validation.py       # F6.2 SQL dialect + parse input
+│   │   ├── sql_validation.py       # F6.2 SQL dialect + parse input
+│   │   └── duckdb_validation.py    # F6.3 fixture + rename input
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
 │   │   ├── run_orchestrator.py
 │   │   ├── validation_engine.py    # F6.1 deterministic aggregation
-│   │   └── sql_parse_validator.py  # F6.2 SQLGlot parse validator
+│   │   ├── sql_parse_validator.py  # F6.2 SQLGlot parse validator
+│   │   └── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
 │   └── utils/
-│       └── fingerprint.py          # shared SHA-256 canonical fingerprint
+│       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
+│       └── sql_identifiers.py      # server-side identifier quoting
 ├── tests/
 │   ├── conftest.py
 │   ├── test_health.py
@@ -84,7 +87,8 @@ backend/
 │   ├── test_risk_evaluate.py
 │   ├── test_runs_analyze.py
 │   ├── test_validation_contracts.py
-│   └── test_sql_parse_validator.py
+│   ├── test_sql_parse_validator.py
+│   └── test_duckdb_rename_validator.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -520,7 +524,7 @@ Do **not** conflate:
 | Enum | Serialized value | F6.1 status |
 |------|------------------|-------------|
 | `SQL_PARSE` | `sql_parse` | Implemented in F6.2 (SQLGlot parse only) |
-| `DUCKDB_EXECUTION` | `duckdb_execution` | Name only — no DuckDB |
+| `DUCKDB_EXECUTION` | `duckdb_execution` | Implemented in F6.3 (in-memory rename only) |
 | `DBT_VALIDATION` | `dbt_validation` | Name only — no dbt |
 
 ### Check execution status
@@ -744,6 +748,128 @@ Evidence may include only safe primitives such as `dialect`,
 `statement_count`, `error_count`, and optional line/column integers.  
 Evidence must **not** include raw SQL, SQL snippets, exception messages,
 tracebacks, or filesystem paths.
+
+### Wiring status
+
+- **No** production validation route  
+- **Not** connected to `POST /api/v1/runs/analyze`  
+- Existing endpoints unchanged  
+
+---
+
+## DuckDB in-memory rename validator (F6.3)
+
+F6.3 is the **second real validator**. It uses **DuckDB 1.5.4** (pinned in
+`pyproject.toml`) to simulate a `rename_column` change against a structured
+in-memory fixture table and returns a F6.1 `ValidationCheckResult` with
+`check_kind = duckdb_execution`.
+
+| Present in F6.3 | Not present in F6.3 |
+|-----------------|---------------------|
+| DuckDB runtime dependency | Validation HTTP endpoint |
+| Structured fixture schema | Caller-provided SQL execution |
+| Isolated `:memory:` rename check | Persistent DuckDB file |
+| Parameter-bound fixture inserts | External DB / user database |
+| Safe identifier quoting | Extension install/load |
+| Unit tests | dbt / analysis-run integration |
+
+### Security boundary
+
+**Caller SQL is never accepted.** Request fields such as `sql`, `setup_sql`,
+`migration_sql`, `assertion_sql`, `teardown_sql`, `command`, `query`, and
+`script` are rejected. All executed SQL is **server-generated** from validated
+structured input.
+
+### Supported change
+
+- Only `rename_column` (F5.1 `NormalizedChange`)
+- Table name comes from `normalized_change.asset.name` (no separate table override)
+
+### Fixture types (allowlisted)
+
+| Enum value | DuckDB SQL type |
+|------------|-----------------|
+| `integer` | `INTEGER` |
+| `bigint` | `BIGINT` |
+| `double` | `DOUBLE` |
+| `boolean` | `BOOLEAN` |
+| `varchar` | `VARCHAR` |
+
+Arbitrary DuckDB types (struct, list, date, decimal, …) are rejected. Cell
+values are type-checked with **no silent coercion**.
+
+### Resource limits
+
+| Limit | Value |
+|-------|------:|
+| Min columns | 1 |
+| Max columns | 64 |
+| Max rows | 500 |
+| Max total cells | 20 000 |
+| Max column name length | 128 |
+| Max varchar cell length | 4096 |
+
+Column names must be unique case-insensitively. Duplicate / blank / control
+characters are rejected before DuckDB opens.
+
+### Connection isolation
+
+For **every** check:
+
+1. Open a new DuckDB connection with `database=":memory:"`  
+2. Apply restrictions supported by DuckDB 1.5.4:  
+   - `enable_external_access=false`  
+   - `autoinstall_known_extensions=false`  
+   - `autoload_known_extensions=false`  
+   - `lock_configuration=true`  
+3. Create table + insert rows (parameter binding)  
+4. Run server-generated `ALTER TABLE … RENAME COLUMN …`  
+5. Verify postconditions  
+6. Close the connection in `finally`  
+
+No shared connections, no file paths, no extension install/load, no ATTACH,
+no COPY to/from files.
+
+### Outcomes (honest)
+
+| Situation | `execution_status` | `outcome` | Evidence code |
+|-----------|--------------------|-----------|---------------|
+| Rename + postconditions OK | `completed` | `pass` | `duckdb_rename_succeeded` |
+| Source column missing in fixture | `completed` | `fail` | `duckdb_source_column_missing` |
+| Target column already in fixture | `completed` | `fail` | `duckdb_target_column_exists` |
+| DuckDB rejects rename | `completed` | `fail` | `duckdb_rename_failed` |
+| Postcondition mismatch | `completed` | `fail` | `duckdb_postcondition_failed` |
+| Fixture setup could not complete | `completed` | `inconclusive` | `duckdb_fixture_setup_inconclusive` |
+| Unexpected engine failure | `error` | `null` | `duckdb_execution_error` |
+
+Fixture setup failure is **INCONCLUSIVE** (rename was not tested), not FAIL.
+
+### Scope of PASS
+
+PASS means: the rename completed on the **supplied DuckDB in-memory fixture**
+and limited postconditions held (source absent, target present, row count
+preserved).
+
+PASS does **not** mean:
+
+- the same rename succeeds on Snowflake / Postgres / BigQuery  
+- vendor behavior matches DuckDB  
+- downstream systems are compatible  
+- production data is safe  
+- universal validation success  
+- deployment authorization  
+
+### Privacy
+
+Evidence may include safe primitives (counts, booleans, stage labels).  
+Evidence must **not** include fixture cell values, generated SQL, exception
+messages, or tracebacks.
+
+### Engine metadata
+
+- `engine_name`: `duckdb`  
+- `engine_version`: actual installed package version (runtime metadata)  
+- Scope: `duckdb_in_memory_rename_simulation`  
 
 ### Wiring status
 

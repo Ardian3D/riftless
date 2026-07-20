@@ -2,6 +2,12 @@
 
 from app.schemas.changes import ChangeIntakeData, ChangeIntakeRequest
 from app.schemas.common import ErrorBody, ErrorResponse, SuccessResponse
+from app.schemas.duckdb_validation import (
+    DuckDbFixture,
+    DuckDbFixtureColumn,
+    DuckDbFixtureColumnType,
+    DuckDbRenameInput,
+)
 from app.schemas.risk import RiskEvaluateRequest, RiskEvaluationData
 from app.schemas.runs import AnalysisRunData, AnalysisRunRequest
 from app.schemas.sql_validation import MAX_SQL_LENGTH, SqlDialect, SqlParseInput
@@ -23,6 +29,10 @@ __all__ = [
     "CheckExecutionStatus",
     "CheckKind",
     "CheckOutcome",
+    "DuckDbFixture",
+    "DuckDbFixtureColumn",
+    "DuckDbFixtureColumnType",
+    "DuckDbRenameInput",
     "ErrorBody",
     "ErrorResponse",
     "MAX_SQL_LENGTH",
