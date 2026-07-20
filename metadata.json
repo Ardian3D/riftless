@@ -1,0 +1,6 @@
+{
+  "name": "RIFTLESS",
+  "description": "Zero-config deterministic schema change validation and downstream blast radius assessment integrating DataHub, SQLGlot, and DeepSeek.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

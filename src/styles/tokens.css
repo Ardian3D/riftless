@@ -1,0 +1,27 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+@theme {
+  /* Brand Palette */
+  --color-riftless-ink: #11181B;
+  --color-riftless-paper: #F7F4ED;
+  --color-riftless-graph-gray: #68707C;
+  --color-riftless-signal: #A8CD16;
+  --color-riftless-critical: #FF5A4E;
+  --color-riftless-warning: #F2A93B;
+  --color-riftless-success: #69DB7C;
+  --color-riftless-muted: #B8B8B0;
+
+  /* Semantic Mappings */
+  --color-background: var(--color-riftless-paper);
+  --color-surface: #FFFFFF;
+  --color-text-primary: var(--color-riftless-ink);
+  --color-text-secondary: var(--color-riftless-graph-gray);
+  --color-border: rgba(17, 24, 27, 0.08);
+  --color-focus: var(--color-riftless-ink);
+  --color-success-primary: var(--color-riftless-success);
+  --color-warning-primary: var(--color-riftless-warning);
+  --color-critical-primary: var(--color-riftless-critical);
+}
