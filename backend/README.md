@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F5.2
+# RIFTLESS Backend — Phase F5.3
 
 Backend control-plane for RIFTLESS.
 
@@ -18,9 +18,11 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | `GET /ready` (local app + configuration only) | Implemented |
 | `POST /api/v1/changes/intake` (`rename_column`) | Implemented (F5.1) |
 | Deterministic normalization + fingerprint | Implemented (F5.1) |
-| `POST /api/v1/risk/evaluate` (ALLOW / WARN / BLOCK) | **Implemented (F5.2)** |
-| Shared fingerprint consistency check | **Implemented (F5.2)** |
-| Artifact registry / intake provenance | **Not implemented** |
+| `POST /api/v1/risk/evaluate` (ALLOW / WARN / BLOCK) | Implemented (F5.2) |
+| Shared fingerprint consistency check | Implemented (F5.2) |
+| `POST /api/v1/runs/analyze` (sync orchestration) | **Implemented (F5.3)** |
+| Artifact registry / durable intake provenance | **Not implemented** |
+| Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
 | Remediation / SQL execution / validation engine | **Not implemented** |
 | Database / ORM / migrations / persistence | **Not implemented** |
@@ -47,17 +49,20 @@ backend/
 │   │   └── routes/
 │   │       ├── health.py
 │   │       ├── changes.py          # POST /api/v1/changes/intake
-│   │       └── risk.py             # POST /api/v1/risk/evaluate
+│   │       ├── risk.py             # POST /api/v1/risk/evaluate
+│   │       └── runs.py             # POST /api/v1/runs/analyze
 │   ├── core/
 │   │   ├── config.py
 │   │   └── errors.py
 │   ├── schemas/
 │   │   ├── common.py
 │   │   ├── changes.py
-│   │   └── risk.py
+│   │   ├── risk.py
+│   │   └── runs.py
 │   ├── services/
 │   │   ├── change_intake.py
-│   │   └── risk_engine.py
+│   │   ├── risk_engine.py
+│   │   └── run_orchestrator.py
 │   └── utils/
 │       └── fingerprint.py          # shared SHA-256 canonical fingerprint
 ├── tests/
@@ -67,7 +72,8 @@ backend/
 │   ├── test_config.py
 │   ├── test_contracts.py
 │   ├── test_change_intake.py
-│   └── test_risk_evaluate.py
+│   ├── test_risk_evaluate.py
+│   └── test_runs_analyze.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -343,6 +349,124 @@ If incomplete context is also supplied, WARN reasons are still listed; decision 
 - Does not authorize deployment or production mutation  
 
 `evaluation_context` is **not** a DataHub Context Pack. That pack is reserved for a later integration phase.
+
+---
+
+## Synchronous analysis run (F5.3)
+
+### Endpoint
+
+```http
+POST /api/v1/runs/analyze
+```
+
+- **HTTP 200** on success (synchronous result returned in the same request)  
+- In-process orchestration of F5.1 intake → F5.2 risk evaluation  
+- **No** HTTP loopback to internal endpoints  
+- **No** persistence, run retrieval, queue, worker, AI, SQL, DataHub, or GitHub  
+
+### Flow
+
+```text
+Change submitted
+→ Intake created (F5.1 service)
+→ Change normalized + fingerprint
+→ Request-local intake reference (current request only)
+→ Risk rules evaluated (F5.2 service)
+→ ALLOW / WARN / BLOCK returned in one run artifact
+```
+
+### Example request
+
+```json
+{
+  "change": {
+    "change_type": "rename_column",
+    "asset": {
+      "platform": "snowflake",
+      "database": "analytics",
+      "schema": "core",
+      "name": "customers"
+    },
+    "source_column": "customer_id",
+    "target_column": "account_id",
+    "reason": "Standardize the customer identifier."
+  },
+  "evaluation_context": {
+    "context_complete": true,
+    "downstream_dependency_count": 0,
+    "protected_asset": false
+  }
+}
+```
+
+Clients must **not** send `run_id`, `intake_id`, `evaluation_id`, fingerprints,
+`normalized_change`, `decision`, reasons, approvals, or policy versions.
+
+### Example response (shape)
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "run_id": "server-generated-uuid",
+    "orchestration_status": "completed",
+    "change_intake": {
+      "intake_id": "…",
+      "submitted_input": { "…" : "…" },
+      "normalized_change": { "…" : "…" },
+      "content_fingerprint": "…",
+      "artifact_version": "1.0"
+    },
+    "risk_evaluation": {
+      "evaluation_id": "…",
+      "intake_id": "same as change_intake.intake_id",
+      "decision": "ALLOW",
+      "scope": "provided_context_only",
+      "reasons": [ { "code": "no_risk_condition_detected", "level": "ALLOW", "message": "…", "evidence": null } ],
+      "evaluated_content_fingerprint": "same as change_intake.content_fingerprint",
+      "evaluation_context": { "…" : "…" },
+      "policy_version": "1.0",
+      "artifact_version": "1.0"
+    },
+    "run_artifact_version": "1.0"
+  },
+  "meta": {
+    "operation": "synchronous_analysis_run",
+    "phase": "F5.3",
+    "execution_mode": "in_process",
+    "persistence": "none",
+    "retrieval_available": false,
+    "context_origin": "caller_provided",
+    "context_trust": "unverified",
+    "intake_reference_origin": "riftless_runtime",
+    "intake_reference_scope": "current_request_only",
+    "intake_reference_persisted": false,
+    "model_used": false,
+    "validation_executed": false,
+    "deployment_authorized": false
+  }
+}
+```
+
+### Provenance (honest)
+
+| Concern | F5.3 value | Meaning |
+|---------|------------|---------|
+| Evaluation context | `caller_provided` / `unverified` | Still supplied by the client; not DataHub-backed. |
+| Intake reference | `riftless_runtime` / `current_request_only` / not persisted | Created by RIFTLESS in this request only. **Not** durable provenance, registry match, or tamper-proof storage. |
+| Standalone `POST /risk/evaluate` | still `caller_provided` / `unverified` | Unchanged from F5.2. |
+
+### `orchestration_status: completed` means
+
+- intake finished in the current request  
+- deterministic evaluation finished  
+- response artifact was assembled  
+
+It does **not** mean ALLOW, validation success, deployment authorization, writeback, or persistence.
+
+ALLOW / WARN / BLOCK remain scoped to `provided_context_only`.  
+AI is not used. Validation engine is not executed.
 
 ---
 
