@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.1
+# RIFTLESS Backend — Phase F6.2
 
 Backend control-plane for RIFTLESS.
 
@@ -21,9 +21,11 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | `POST /api/v1/risk/evaluate` (ALLOW / WARN / BLOCK) | Implemented (F5.2) |
 | Shared fingerprint consistency check | Implemented (F5.2) |
 | `POST /api/v1/runs/analyze` (sync orchestration) | Implemented (F5.3) |
-| Validation domain contracts (schemas + aggregation) | **Implemented (F6.1)** |
+| Validation domain contracts (schemas + aggregation) | Implemented (F6.1) |
+| SQLGlot SQL parse validator (`sql_parse`) | **Implemented (F6.2)** |
 | Validation HTTP endpoint | **Not implemented** |
-| SQLGlot / DuckDB / dbt executors | **Not implemented** (contract names only) |
+| DuckDB execution validator | **Not implemented** |
+| dbt validation executor | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
@@ -62,12 +64,14 @@ backend/
 │   │   ├── changes.py
 │   │   ├── risk.py
 │   │   ├── runs.py
-│   │   └── validation.py           # F6.1 validation contracts
+│   │   ├── validation.py           # F6.1 validation contracts
+│   │   └── sql_validation.py       # F6.2 SQL dialect + parse input
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
 │   │   ├── run_orchestrator.py
-│   │   └── validation_engine.py    # F6.1 deterministic aggregation
+│   │   ├── validation_engine.py    # F6.1 deterministic aggregation
+│   │   └── sql_parse_validator.py  # F6.2 SQLGlot parse validator
 │   └── utils/
 │       └── fingerprint.py          # shared SHA-256 canonical fingerprint
 ├── tests/
@@ -79,7 +83,8 @@ backend/
 │   ├── test_change_intake.py
 │   ├── test_risk_evaluate.py
 │   ├── test_runs_analyze.py
-│   └── test_validation_contracts.py
+│   ├── test_validation_contracts.py
+│   └── test_sql_parse_validator.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -514,7 +519,7 @@ Do **not** conflate:
 
 | Enum | Serialized value | F6.1 status |
 |------|------------------|-------------|
-| `SQL_PARSE` | `sql_parse` | Name only — no SQLGlot |
+| `SQL_PARSE` | `sql_parse` | Implemented in F6.2 (SQLGlot parse only) |
 | `DUCKDB_EXECUTION` | `duckdb_execution` | Name only — no DuckDB |
 | `DBT_VALIDATION` | `dbt_validation` | Name only — no dbt |
 
@@ -642,10 +647,109 @@ input lists are not mutated.
 - No validation production route  
 - No SQL parse / execute  
 - No dbt command  
-- No SQLGlot, DuckDB, or dbt dependencies  
+- No DuckDB or dbt dependencies (SQLGlot added in F6.2)  
 - No persistence, registry, queue, worker, or retry  
 - No DataHub / GitHub / DeepSeek / remediation / writeback  
 - No frontend wiring  
+
+---
+
+## SQLGlot parse validator (F6.2)
+
+F6.2 is the **first real validator**. It uses **SQLGlot 30.12.0** (pinned in
+`pyproject.toml`) to parse SQL syntax for a declared dialect and returns a
+F6.1 `ValidationCheckResult` with `check_kind = sql_parse`.
+
+| Present in F6.2 | Not present in F6.2 |
+|-----------------|---------------------|
+| SQLGlot runtime dependency | Validation HTTP endpoint |
+| `SqlDialect` + `SqlParseInput` | DuckDB execution |
+| `run_sql_parse_check` service | dbt validation |
+| Real `sql_parse` check results | SQL execution / database connection |
+| Unit tests | Analysis-run integration |
+| | Schema resolution / object existence |
+| | Transpilation / rewrite / remediation |
+
+### Supported dialects (F6.2)
+
+Exact serialized values only (no aliases):
+
+| Dialect | Value |
+|---------|-------|
+| Snowflake | `snowflake` |
+| PostgreSQL | `postgres` |
+| BigQuery | `bigquery` |
+| DuckDB | `duckdb` |
+
+Unsupported strings (`postgresql`, `bq`, `sf`, …) are rejected by the input
+schema **before** the parser runs.
+
+Declaring a dialect only means SQLGlot is invoked with that dialect name. It
+does **not** mean a database is connected or that vendor runtime behavior is
+verified.
+
+### Input contract
+
+```json
+{
+  "sql": "SELECT ...",
+  "dialect": "snowflake",
+  "required": true
+}
+```
+
+- SQL max length: **100000** characters  
+- Blank / whitespace-only SQL rejected  
+- Null bytes and other C0 controls (except tab / LF / CR) rejected  
+- SQL is **not** rewritten or reformatted before parse  
+- Extra fields forbidden  
+- Raw SQL is **never** copied into evidence or summary  
+
+### Outcomes (honest)
+
+| Situation | `execution_status` | `outcome` | Evidence code |
+|-----------|--------------------|-----------|---------------|
+| Syntax accepted, ≥1 statement | `completed` | `pass` | `sql_parse_succeeded` |
+| Syntax error detected | `completed` | `fail` | `sql_parse_failed` |
+| Comment-only / no statement | `completed` | `fail` | `sql_no_statement` |
+| Unexpected engine failure | `error` | `null` | `sql_parser_execution_error` |
+
+**Parse failure ≠ execution error.**  
+`FAIL` means the parser finished and found a syntax problem.  
+`ERROR` means the parser itself did not complete.
+
+### Scope of PASS
+
+PASS means: SQLGlot found **no syntax error** for the declared dialect with
+the installed engine version.
+
+PASS does **not** mean:
+
+- the query can be executed  
+- tables or columns exist  
+- semantic correctness  
+- production safety  
+- universal change safety  
+- deployment authorization  
+
+### Engine metadata
+
+- `engine_name`: `sqlglot`  
+- `engine_version`: actual installed package version (runtime metadata)  
+- Scope: `sql_syntax_for_declared_dialect`  
+
+### Privacy
+
+Evidence may include only safe primitives such as `dialect`,
+`statement_count`, `error_count`, and optional line/column integers.  
+Evidence must **not** include raw SQL, SQL snippets, exception messages,
+tracebacks, or filesystem paths.
+
+### Wiring status
+
+- **No** production validation route  
+- **Not** connected to `POST /api/v1/runs/analyze`  
+- Existing endpoints unchanged  
 
 ---
 
