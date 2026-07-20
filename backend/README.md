@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F5.3
+# RIFTLESS Backend — Phase F6.1
 
 Backend control-plane for RIFTLESS.
 
@@ -20,16 +20,19 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | Deterministic normalization + fingerprint | Implemented (F5.1) |
 | `POST /api/v1/risk/evaluate` (ALLOW / WARN / BLOCK) | Implemented (F5.2) |
 | Shared fingerprint consistency check | Implemented (F5.2) |
-| `POST /api/v1/runs/analyze` (sync orchestration) | **Implemented (F5.3)** |
+| `POST /api/v1/runs/analyze` (sync orchestration) | Implemented (F5.3) |
+| Validation domain contracts (schemas + aggregation) | **Implemented (F6.1)** |
+| Validation HTTP endpoint | **Not implemented** |
+| SQLGlot / DuckDB / dbt executors | **Not implemented** (contract names only) |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
-| Remediation / SQL execution / validation engine | **Not implemented** |
+| Remediation / SQL execution / production mutation | **Not implemented** |
 | Database / ORM / migrations / persistence | **Not implemented** |
 | Authentication / authorization | **Not implemented** |
 | DeepSeek / Gemini | **Not implemented** |
-| SQLGlot / DuckDB / dbt / writeback | **Not implemented** |
-| Queues, workers, websockets, deployment | **Not implemented** |
+| Writeback / deployment handoff | **Not implemented** |
+| Queues, workers, websockets | **Not implemented** |
 | Frontend API wiring | **Not implemented** |
 
 ## Python requirement
@@ -58,11 +61,13 @@ backend/
 │   │   ├── common.py
 │   │   ├── changes.py
 │   │   ├── risk.py
-│   │   └── runs.py
+│   │   ├── runs.py
+│   │   └── validation.py           # F6.1 validation contracts
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
-│   │   └── run_orchestrator.py
+│   │   ├── run_orchestrator.py
+│   │   └── validation_engine.py    # F6.1 deterministic aggregation
 │   └── utils/
 │       └── fingerprint.py          # shared SHA-256 canonical fingerprint
 ├── tests/
@@ -73,7 +78,8 @@ backend/
 │   ├── test_contracts.py
 │   ├── test_change_intake.py
 │   ├── test_risk_evaluate.py
-│   └── test_runs_analyze.py
+│   ├── test_runs_analyze.py
+│   └── test_validation_contracts.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -135,7 +141,7 @@ Prefix: `RIFTLESS_` (never `VITE_`).
 | `RIFTLESS_PORT` | `8000` | Dev server bind port |
 | `RIFTLESS_DEBUG` | `false` | FastAPI debug flag |
 
-No credentials or API keys are required for F5.2.
+No credentials or API keys are required for F5–F6.1.
 
 ---
 
@@ -467,6 +473,179 @@ It does **not** mean ALLOW, validation success, deployment authorization, writeb
 
 ALLOW / WARN / BLOCK remain scoped to `provided_context_only`.  
 AI is not used. Validation engine is not executed.
+
+---
+
+## Validation contract foundation (F6.1)
+
+F6.1 defines the **shared domain contracts** that future SQLGlot, DuckDB, and
+dbt validators will use. It does **not** run any validator.
+
+| Present in F6.1 | Not present in F6.1 |
+|-----------------|---------------------|
+| Schemas / enums | Validation HTTP endpoint |
+| State invariants | SQLGlot parsing |
+| Evidence / check-result / artifact shapes | DuckDB execution |
+| Deterministic aggregation pure functions | dbt CLI / subprocess |
+| Unit tests | Persistence / artifact registry |
+| | Plugin registry / executor base classes |
+
+Check-kind enum values (`sql_parse`, `duckdb_execution`, `dbt_validation`) are
+**contract names only**. Their presence does **not** mean those executors exist.
+
+### Three separate concepts
+
+| Concept | Meaning |
+|---------|---------|
+| **execution_status** | Did the validator actually finish running? |
+| **outcome** | What did a completed check conclude within its scope? |
+| **evidence** | Bounded, safe structured proof items for that check |
+
+Do **not** conflate:
+
+| Confusion | Correct reading |
+|-----------|-----------------|
+| FAIL = ERROR | FAIL is a completed check that found a problem; ERROR means execution itself failed |
+| PASS = deployment authorization | PASS is scoped check success only |
+| COMPLETED = PASS | COMPLETED only means the check finished and produced an outcome |
+| UNAVAILABLE = FAIL | UNAVAILABLE means the engine/prerequisite was missing |
+
+### Check kinds (contract-only)
+
+| Enum | Serialized value | F6.1 status |
+|------|------------------|-------------|
+| `SQL_PARSE` | `sql_parse` | Name only — no SQLGlot |
+| `DUCKDB_EXECUTION` | `duckdb_execution` | Name only — no DuckDB |
+| `DBT_VALIDATION` | `dbt_validation` | Name only — no dbt |
+
+### Check execution status
+
+| Status | Serialized | Meaning |
+|--------|------------|---------|
+| `COMPLETED` | `completed` | Validator finished and produced an outcome |
+| `ERROR` | `error` | Validator was attempted but could not finish |
+| `UNAVAILABLE` | `unavailable` | Validator or prerequisite not available |
+| `SKIPPED` | `skipped` | Validator intentionally not run for an explicit reason |
+
+### Check / overall outcome
+
+| Outcome | Serialized | Meaning |
+|---------|------------|---------|
+| `PASS` | `pass` | Completed check found no failure in its tested scope |
+| `FAIL` | `fail` | Completed check found a failing condition in its tested scope |
+| `INCONCLUSIVE` | `inconclusive` | Completed but evidence insufficient, or overall cannot decide |
+
+**PASS does not mean:** universally safe change, all downstream systems safe,
+deployment authorized, production mutation allowed, or human approval present.
+
+### State invariants (check result)
+
+Invalid combinations are **rejected** (schema/domain validation error). They
+are never auto-repaired.
+
+1. `COMPLETED` → `outcome` required (`pass` \| `fail` \| `inconclusive`)
+2. `ERROR` → `outcome` null; at least one evidence item
+3. `UNAVAILABLE` → `outcome` null; at least one evidence item
+4. `SKIPPED` → `outcome` null; at least one evidence item
+5. `PASS` / `FAIL` / `INCONCLUSIVE` only when `execution_status` is `COMPLETED`
+
+### Validation evidence
+
+```json
+{
+  "code": "machine_readable_code",
+  "message": "Safe human-readable explanation.",
+  "details": null
+}
+```
+
+- `code`: lowercase snake_case, non-empty, length-bounded  
+- `message`: human-readable, non-empty; no traceback or filesystem paths  
+- `details`: optional structured primitives only (no exception objects)  
+
+Evidence is **not** authorization, cryptographic signature, provenance proof,
+blockchain record, or deployment approval.
+
+### Validation check result (shape)
+
+```json
+{
+  "check_id": "<UUID>",
+  "check_kind": "sql_parse | duckdb_execution | dbt_validation",
+  "required": true,
+  "execution_status": "completed | error | unavailable | skipped",
+  "outcome": "pass | fail | inconclusive | null",
+  "scope": "bounded description",
+  "summary": "Safe concise summary.",
+  "evidence": [],
+  "engine_name": null,
+  "engine_version": null
+}
+```
+
+- `check_id` is server-generated UUID  
+- `required` controls whether the check affects overall outcome  
+- `engine_name` / `engine_version` stay null until a real executor exists  
+- No timestamps in F6.1  
+
+### Validation artifact (shape)
+
+```json
+{
+  "validation_id": "<UUID>",
+  "subject_fingerprint": "<64 lowercase SHA-256 hex>",
+  "scope": "provided_artifacts_only",
+  "execution_status": "completed | partial | not_run | execution_failed",
+  "outcome": "pass | fail | inconclusive",
+  "checks": [],
+  "artifact_version": "1.0"
+}
+```
+
+- Scope is always `provided_artifacts_only`  
+- Artifact is **not** persisted in F6.1  
+- `subject_fingerprint` uses the same 64-char lowercase SHA-256 format as F5  
+- Fingerprint is content identity only — **not** signature, auth, provenance,
+  authorization, tamper-proof storage, blockchain, or ledger  
+
+### Overall execution status (aggregation)
+
+| Status | Rule |
+|--------|------|
+| `not_run` | Empty checks, or no COMPLETED and no ERROR (only UNAVAILABLE/SKIPPED) |
+| `completed` | Every check is COMPLETED |
+| `partial` | Some COMPLETED and some not |
+| `execution_failed` | No COMPLETED and at least one ERROR |
+
+### Overall outcome (required checks only)
+
+| Outcome | Rule |
+|---------|------|
+| `fail` | Any **required** check is COMPLETED + FAIL |
+| `pass` | At least one required check exists and **all** required are COMPLETED + PASS |
+| `inconclusive` | Everything else (empty required set, required ERROR/UNAVAILABLE/SKIPPED/INCONCLUSIVE, optional-only lists) |
+
+**Required vs optional:**
+
+- Only `required: true` checks drive overall outcome.  
+- Optional FAIL cannot turn a required-PASS aggregate into FAIL.  
+- Optional checks still appear in `checks` and still affect overall
+  **execution_status** (e.g. COMPLETED + SKIPPED → `partial`).  
+- No required checks → overall outcome `inconclusive`.  
+
+Aggregation is a pure function (`build_validation_artifact`): no network,
+database, filesystem, subprocess, or AI. Input check order is preserved;
+input lists are not mutated.
+
+### What F6.1 does **not** do
+
+- No validation production route  
+- No SQL parse / execute  
+- No dbt command  
+- No SQLGlot, DuckDB, or dbt dependencies  
+- No persistence, registry, queue, worker, or retry  
+- No DataHub / GitHub / DeepSeek / remediation / writeback  
+- No frontend wiring  
 
 ---
 
