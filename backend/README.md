@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.3
+# RIFTLESS Backend — Phase F6.4
 
 Backend control-plane for RIFTLESS.
 
@@ -23,9 +23,9 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | `POST /api/v1/runs/analyze` (sync orchestration) | Implemented (F5.3) |
 | Validation domain contracts (schemas + aggregation) | Implemented (F6.1) |
 | SQLGlot SQL parse validator (`sql_parse`) | Implemented (F6.2) |
-| DuckDB in-memory rename validator (`duckdb_execution`) | **Implemented (F6.3)** |
+| DuckDB in-memory rename validator (`duckdb_execution`) | Implemented (F6.3) |
+| dbt controlled project parse validator (`dbt_validation`) | **Implemented (F6.4)** |
 | Validation HTTP endpoint | **Not implemented** |
-| dbt validation executor | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
@@ -66,17 +66,20 @@ backend/
 │   │   ├── runs.py
 │   │   ├── validation.py           # F6.1 validation contracts
 │   │   ├── sql_validation.py       # F6.2 SQL dialect + parse input
-│   │   └── duckdb_validation.py    # F6.3 fixture + rename input
+│   │   ├── duckdb_validation.py    # F6.3 fixture + rename input
+│   │   └── dbt_validation.py       # F6.4 dbt parse input
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
 │   │   ├── run_orchestrator.py
 │   │   ├── validation_engine.py    # F6.1 deterministic aggregation
 │   │   ├── sql_parse_validator.py  # F6.2 SQLGlot parse validator
-│   │   └── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
+│   │   ├── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
+│   │   └── dbt_parse_validator.py  # F6.4 controlled dbt parse
 │   └── utils/
 │       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
-│       └── sql_identifiers.py      # server-side identifier quoting
+│       ├── sql_identifiers.py      # server-side identifier quoting
+│       └── controlled_dbt_project.py  # F6.4 temp project builder
 ├── tests/
 │   ├── conftest.py
 │   ├── test_health.py
@@ -88,7 +91,8 @@ backend/
 │   ├── test_runs_analyze.py
 │   ├── test_validation_contracts.py
 │   ├── test_sql_parse_validator.py
-│   └── test_duckdb_rename_validator.py
+│   ├── test_duckdb_rename_validator.py
+│   └── test_dbt_parse_validator.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -525,7 +529,7 @@ Do **not** conflate:
 |------|------------------|-------------|
 | `SQL_PARSE` | `sql_parse` | Implemented in F6.2 (SQLGlot parse only) |
 | `DUCKDB_EXECUTION` | `duckdb_execution` | Implemented in F6.3 (in-memory rename only) |
-| `DBT_VALIDATION` | `dbt_validation` | Name only — no dbt |
+| `DBT_VALIDATION` | `dbt_validation` | Implemented in F6.4 (controlled project parse only) |
 
 ### Check execution status
 
@@ -870,6 +874,148 @@ messages, or tracebacks.
 - `engine_name`: `duckdb`  
 - `engine_version`: actual installed package version (runtime metadata)  
 - Scope: `duckdb_in_memory_rename_simulation`  
+
+### Wiring status
+
+- **No** production validation route  
+- **Not** connected to `POST /api/v1/runs/analyze`  
+- Existing endpoints unchanged  
+
+---
+
+## Controlled dbt project parse validator (F6.4)
+
+F6.4 is the **third real validator**. It uses **dbt-core 1.10.15** with
+**dbt-duckdb 1.10.1** (pinned in `pyproject.toml`) to run allowlisted
+`dbt parse` against a **server-generated temporary project** and returns a
+F6.1 `ValidationCheckResult` with `check_kind = dbt_validation`.
+
+Pinned companions remain unchanged:
+
+- `duckdb==1.5.4`
+- `sqlglot==30.12.0`
+
+| Present in F6.4 | Not present in F6.4 |
+|-----------------|---------------------|
+| dbt-core + dbt-duckdb dependencies | Validation HTTP endpoint |
+| Server-built temp project + profile | Caller project / profiles path |
+| Allowlisted `dbt parse` only | `dbt run` / `build` / `test` / `deps` |
+| Manifest verification | Packages, macros, seeds, snapshots |
+| Timeout (60s) + sanitized env | Production database connection |
+| Temp cleanup after every outcome | Analysis-run integration |
+
+### Input contract
+
+```json
+{
+  "model_name": "customers_renamed",
+  "model_sql": "select customer_id as account_id from customers",
+  "required": true
+}
+```
+
+- `model_name`: lowercase snake_case `^[a-z][a-z0-9_]{0,63}$` (not a path)  
+- `model_sql`: plain SQL only, max **100000** characters  
+- Jinja openers `{{`, `{%`, `{#` are **rejected**  
+- Caller cannot send: project/profiles paths, command, adapter, packages,
+  macros, environment, or selectors  
+
+### Temporary project (server-owned)
+
+Per check, RIFTLESS creates a new temporary directory containing only:
+
+- `dbt_project.yml` (project name `riftless_validation`)  
+- `profiles.yml` (DuckDB `path: ':memory:'`)  
+- `models/<model_name>.sql`  
+
+No `packages.yml`, macros, seeds, snapshots, analyses, or custom tests.  
+Materialization is server-fixed (`view`). The entire tree is deleted after
+success, process failure, timeout, and unexpected error.
+
+### Command allowlist
+
+Only:
+
+```text
+dbt parse --project-dir … --profiles-dir … --target-path … --log-path …
+```
+
+- Argument list + `shell=False`  
+- Executable from the backend virtual environment  
+- Timeout: **60 seconds**  
+- Never: run, build, test, seed, snapshot, compile, debug, deps, docs  
+
+### Environment boundary
+
+Subprocess environment is built explicitly (not a full parent env copy):
+
+- minimal Windows process paths  
+- isolated TEMP/HOME under the temp root  
+- `DBT_SEND_ANONYMOUS_USAGE_STATS=False`, `DO_NOT_TRACK=1`  
+- no API keys / GitHub / DataHub / DeepSeek / Gemini / `VITE_*` secrets  
+
+Honest limit: no OS-level network sandbox is claimed. The validator does not
+perform intentional network operations and does not run `dbt deps`.
+
+### Outcomes (honest)
+
+| Situation | `execution_status` | `outcome` | Evidence code |
+|-----------|--------------------|-----------|---------------|
+| Parse OK + verified manifest | `completed` | `pass` | `dbt_parse_succeeded` |
+| dbt non-zero process exit | `error` | `null` | `dbt_parse_process_failed` |
+| dbt / adapter unavailable | `unavailable` | `null` | `dbt_engine_unavailable` |
+| Timeout | `error` | `null` | `dbt_execution_timeout` |
+| Project setup failure | `error` | `null` | `dbt_project_setup_error` |
+| Manifest missing/invalid/unexpected | `error` | `null` | `dbt_manifest_verification_error` |
+| Other engine failure | `error` | `null` | `dbt_execution_error` |
+
+F6.4 does **not** currently emit a proven caller-caused `FAIL`. Generic
+non-zero dbt exits are treated as **execution ERROR**, not validation FAIL.
+stdout/stderr are captured only for internal process handling and are **never**
+classified into FAIL reasons or returned in evidence.
+
+### dbt parse is not a SQL syntax validator
+
+SQL grammar validation remains the responsibility of **F6.2 (SQLGlot)**.
+
+On the pinned engines (`dbt-core==1.10.15`, `dbt-duckdb==1.10.1`), plain SQL
+that is grammatically invalid can still:
+
+- yield dbt parse exit code `0`  
+- register the expected model in the manifest  
+- produce F6.4 `COMPLETED` + `PASS`  
+
+That PASS only means **controlled project discovery + configuration parse +
+expected model registration** succeeded. It does **not** mean the SQL is
+syntactically valid.
+
+### Scope of PASS
+
+PASS means: dbt Core parsed the **server-generated** project and the expected
+single model appears in the manifest for the installed engine versions.
+
+Scope value: `dbt_server_generated_project_manifest_parse`
+
+PASS does **not** mean:
+
+- SQL grammar is valid (use SQLGlot F6.2)  
+- SQL executes successfully  
+- `dbt run` / `build` / `test` would succeed  
+- production schema/relations exist  
+- vendor compatibility  
+- deployment authorization  
+
+### Privacy
+
+Raw model SQL, stdout/stderr, temporary paths, command paths, and exception
+messages never appear in `ValidationCheckResult` evidence or summary.
+
+### Engine metadata
+
+- `engine_name`: `dbt-core`  
+- `engine_version`: installed dbt-core package version  
+- Evidence may include `adapter_name: duckdb` and installed `adapter_version`  
+- Scope: `dbt_server_generated_project_manifest_parse`  
 
 ### Wiring status
 
