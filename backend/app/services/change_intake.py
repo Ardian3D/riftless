@@ -18,8 +18,6 @@ Two intakes that differ only by reason will produce different fingerprints.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from typing import Any
 
@@ -30,6 +28,7 @@ from app.schemas.changes import (
     ChangeIntakeRequest,
     NormalizedChange,
 )
+from app.utils.fingerprint import fingerprint_payload
 
 
 ARTIFACT_VERSION = "1.0"
@@ -151,24 +150,11 @@ def normalize_change(request: ChangeIntakeRequest) -> NormalizedChange:
 def compute_content_fingerprint(normalized: NormalizedChange) -> str:
     """Return lowercase hex SHA-256 over canonical JSON of normalized_change.
 
-    Canonical form:
-    - UTF-8 encoding
-    - keys sorted recursively via ``sort_keys=True``
-    - compact separators ``(',', ':')``
-    - ``ensure_ascii=False`` so Unicode is stable as UTF-8 bytes
-
-    Only ``normalized_change`` is hashed — never ``submitted_input`` or
-    ``intake_id``.
+    Delegates to the shared fingerprint utility so F5.1 and F5.2 use one
+    locked algorithm. Only ``normalized_change`` is hashed — never
+    ``submitted_input`` or ``intake_id``.
     """
-    payload = normalized.fingerprint_payload()
-    canonical = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return digest
+    return fingerprint_payload(normalized.fingerprint_payload())
 
 
 def process_change_intake(request: ChangeIntakeRequest) -> ChangeIntakeData:

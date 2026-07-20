@@ -109,20 +109,29 @@ class ChangeIntakeRequest(BaseModel):
 
 
 class AssetNormalized(BaseModel):
-    """Normalized asset reference."""
+    """Normalized asset reference.
 
-    model_config = ConfigDict(extra="forbid")
+    Accepts and emits the client-facing key ``schema`` while keeping the
+    Python attribute ``schema_name`` (``schema`` is reserved-ish in typing).
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     platform: str
     database: str
-    schema_name: str = Field(serialization_alias="schema")
+    schema_name: str = Field(alias="schema")
     name: str
 
 
 class NormalizedChange(BaseModel):
-    """Deterministically normalized rename_column change."""
+    """Deterministically normalized rename_column change.
 
-    model_config = ConfigDict(extra="forbid")
+    Used both as the F5.1 output artifact and as the F5.2 intake reference
+    payload. Fingerprint input always uses ``by_alias=True`` so the JSON key
+    is ``schema``.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     change_type: Literal["rename_column"]
     asset: AssetNormalized
