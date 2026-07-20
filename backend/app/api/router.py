@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter
 
-from app.api.routes import health
+from app.api.routes import changes, health
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+# F5.1 change intake — fixed API path prefix (not a general versioning system).
+api_router.include_router(changes.router, prefix="/api/v1")
