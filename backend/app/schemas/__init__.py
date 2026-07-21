@@ -28,7 +28,12 @@ from app.schemas.run_validation import (
     RunValidationChecks,
     RunValidationInput,
 )
-from app.schemas.runs import AnalysisRunData, AnalysisRunRequest
+from app.schemas.runs import (
+    RUN_ARTIFACT_VERSION,
+    AdvisoryRunOptions,
+    AnalysisRunData,
+    AnalysisRunRequest,
+)
 from app.schemas.sql_validation import MAX_SQL_LENGTH, SqlDialect, SqlParseInput
 from app.schemas.validation import (
     CheckExecutionStatus,
@@ -48,8 +53,10 @@ __all__ = [
     "AdvisoryContextPack",
     "AdvisoryExecutionStatus",
     "AdvisoryStatusDetail",
+    "AdvisoryRunOptions",
     "AnalysisRunData",
     "AnalysisRunRequest",
+    "RUN_ARTIFACT_VERSION",
     "ChangeIntakeData",
     "ChangeIntakeRequest",
     "CheckExecutionStatus",

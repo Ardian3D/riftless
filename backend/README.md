@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F7.4
+# RIFTLESS Backend — Phase F7.5
 
 Backend control-plane for RIFTLESS.
 
@@ -31,9 +31,9 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | Advisory contract foundation | Implemented (F7.1) |
 | Redacted context pack builder | Implemented (F7.2) |
 | DeepSeek request/response boundary | Implemented (F7.3) |
-| DeepSeek provider execution boundary | **Implemented (F7.4)** |
+| DeepSeek provider execution boundary | Implemented (F7.4) |
+| Optional advisory in analysis runs | **Implemented (F7.5)** |
 | Advisory HTTP endpoint | **Not implemented** |
-| Optional advisory in analysis runs | **Not implemented** (F7.5) |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
@@ -2004,8 +2004,7 @@ is still untrusted natural language.
 
 ### Not in F7.4
 
-- Advisory HTTP endpoint
-- `/runs/analyze` integration (planned F7.5)
+- Advisory HTTP endpoint (still not present after F7.5)
 - Live API smoke tests
 - Retries / backoff / circuit breaker / streaming / tools
 - Persistence / retrieval
@@ -2013,6 +2012,147 @@ is still untrusted natural language.
 - Frontend wiring
 
 OpenAPI production routes remain the six F6 paths.
+
+---
+
+## Optional advisory run integration (F7.5)
+
+F7.5 extends `POST /api/v1/runs/analyze` with an **optional** `advisory`
+request flag. There is **no** standalone advisory HTTP endpoint.
+
+| In scope | Out of scope |
+|----------|--------------|
+| Optional `advisory.requested` on analysis run | Standalone advisory route |
+| Server-built F7.2 `AdvisoryContextPack` | Caller-supplied context/prompt/model |
+| F7.4 provider execution when requested | Browser API keys / provider config |
+| `advisory_artifact` on run response | Persistence / retrieval / retry |
+| `run_artifact_version` **1.2** | Streaming / tools / fallbacks |
+| FakeTransport injection for tests | Live DeepSeek smoke tests |
+| Independent risk + validation + advisory | Deployment authorization |
+
+### Optional request shape
+
+```json
+{
+  "change": { "…": "F5.1 change" },
+  "evaluation_context": { "…": "F5.2 context" },
+  "validation": { "…": "optional F6.7 block" },
+  "advisory": {
+    "requested": true
+  }
+}
+```
+
+Callers may only set `advisory.requested`. Extra fields (`api_key`, `model`,
+`prompt`, `context_pack`, `timeout`, `retry`, `transport`, `temperature`,
+`endpoint`, …) are **rejected** (HTTP 422).
+
+Omitting `advisory`, or setting `requested=false`, means:
+
+- no `DEEPSEEK_API_KEY` read
+- no context pack build
+- no transport / network
+- `advisory_requested=false`
+- `advisory_artifact=null`
+
+Legacy requests without `advisory` remain fully supported.
+
+### Orchestration order
+
+1. F5.1 change intake  
+2. F5.2 deterministic risk  
+3. Optional F6 validation (when `validation` present)  
+4. Optional F7.2 redacted context pack (when `advisory.requested=true`)  
+5. Optional F7.4 DeepSeek provider execution  
+6. Run artifact assembly (`run_artifact_version=1.2`)
+
+Validation always finishes before advisory context is built so the pack can
+mirror the final ValidationArtifact (including null check outcomes and empty
+checks). Advisory is never parallelized in F7.5.
+
+### Config and transport
+
+- API key source: server environment `DEEPSEEK_API_KEY` only  
+- Missing/blank key → formed advisory artifact with
+  `execution_status=unavailable`, `code=provider_not_configured`, **no**
+  network, HTTP **200**  
+- Production transport: `StdlibDeepSeekHTTPSTransport`  
+- Tests inject `advisory_environ` / `advisory_transport` as keyword-only
+  internal arguments (not part of the HTTP schema)  
+- `/health` and `/ready` do **not** require the key  
+
+### Run completion semantics
+
+`orchestration_status=completed` means every **requested** pipeline artifact
+was formed as a structured object. It does **not** mean:
+
+- risk ALLOW  
+- validation PASS  
+- advisory completed  
+- provider available  
+- deployment authorized  
+
+Provider completed / error / unavailable advisory artifacts all keep the run
+completed when the AdvisoryArtifact itself was formed. Provider HTTP
+401/429/500/timeout map into `advisory_artifact`, **not** endpoint status.
+
+### Independence
+
+| Scenario | Risk | Validation | Advisory |
+|----------|------|------------|----------|
+| ALLOW + no validation + advisory completed | ALLOW | null | completed |
+| ALLOW + validation PASS + advisory unavailable | ALLOW | PASS | unavailable |
+| ALLOW + validation FAIL + advisory completed | ALLOW | FAIL | completed |
+| WARN + validation INCONCLUSIVE + advisory error | WARN | INCONCLUSIVE | error |
+| BLOCK + validation PASS + advisory completed | BLOCK | PASS | completed |
+| BLOCK + validation execution_failed + advisory unavailable | BLOCK | execution_failed | unavailable |
+| BLOCK + no validation + advisory not requested | BLOCK | null | null |
+
+There is **no** logic that:
+
+- maps advisory unavailable → risk BLOCK  
+- maps advisory error → validation FAIL  
+- maps advisory completed → risk ALLOW  
+- skips advisory because of BLOCK or validation FAIL  
+- turns provider failure into endpoint HTTP 500  
+
+### Privacy and authority
+
+- Only the F7.2 allowlisted redacted context pack is sent to the provider  
+- Raw database/schema/table/column names, reason text, SQL, fixtures, and
+  evidence messages/details never enter the provider request  
+- Run response does **not** include the context pack, raw provider envelope,
+  usage, request IDs, or API keys  
+- `authority=advisory_only`, `risk_effect=none`, `validation_effect=none`,
+  `deployment_authorized=false`  
+- Provider output remains untrusted natural language  
+
+### Trust meta (when advisory requested)
+
+| Field | Value |
+|-------|-------|
+| `advisory_requested` / `advisory_executed` / `advisory_artifact_present` | `true` |
+| `advisory_authority` | `advisory_only` |
+| `advisory_input_origin` | `server_controlled_redacted_projection` |
+| `advisory_source_scope` | `current_request_only` |
+| `advisory_provider_output_trust` | `untrusted_natural_language` |
+| `advisory_persistence` | `none` |
+| `advisory_retrieval_available` | `false` |
+| `model_used` | `true` (advisory was requested; not proof of completion) |
+| `deployment_authorized` | `false` |
+
+When advisory is omitted, those advisory meta fields are `false` / `null` and
+`model_used` remains `false`.
+
+### Not in F7.5
+
+- Standalone advisory endpoint  
+- Background tasks / queues / retries / streaming / tool calling  
+- Persistence / retrieval / prompt archives  
+- Frontend wiring / live provider tests  
+- Generic multi-provider framework  
+
+OpenAPI production routes remain exactly the six F6 paths.
 
 ---
 
