@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F7.3
+# RIFTLESS Backend — Phase F7.4
 
 Backend control-plane for RIFTLESS.
 
@@ -30,9 +30,10 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | Analysis-run optional validation integration | Implemented (F6.7) |
 | Advisory contract foundation | Implemented (F7.1) |
 | Redacted context pack builder | Implemented (F7.2) |
-| DeepSeek request/response boundary | **Implemented (F7.3)** |
-| DeepSeek / model provider client (network execution) | **Not implemented** |
+| DeepSeek request/response boundary | Implemented (F7.3) |
+| DeepSeek provider execution boundary | **Implemented (F7.4)** |
 | Advisory HTTP endpoint | **Not implemented** |
+| Optional advisory in analysis runs | **Not implemented** (F7.5) |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
@@ -92,7 +93,10 @@ backend/
 │   │   ├── advisory_artifacts.py   # F7.1 pure advisory builders
 │   │   ├── advisory_context_builder.py  # F7.2 redacted context pack
 │   │   ├── deepseek_prompt_builder.py   # F7.3 request builder
-│   │   └── deepseek_response_parser.py  # F7.3 strict JSON parser
+│   │   ├── deepseek_response_parser.py  # F7.3 strict JSON parser
+│   │   ├── deepseek_provider_config.py  # F7.4 API-key config boundary
+│   │   ├── deepseek_http_transport.py   # F7.4 stdlib HTTPS transport
+│   │   └── deepseek_provider_execution.py  # F7.4 execution service
 │   └── utils/
 │       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
 │       ├── advisory_fingerprint.py # F7.1 context-pack fingerprint
@@ -115,7 +119,8 @@ backend/
 │   ├── test_validation_execute_api.py
 │   ├── test_advisory_contracts.py  # F7.1
 │   ├── test_advisory_context_builder.py  # F7.2
-│   └── test_deepseek_advisory_boundary.py  # F7.3
+│   ├── test_deepseek_advisory_boundary.py  # F7.3
+│   └── test_deepseek_provider_execution.py  # F7.4
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -1855,9 +1860,143 @@ Advisory still does **not** change risk decisions, validation outcomes, or
 deployment authorization. Model output remains untrusted natural language.
 
 OpenAPI production routes remain the six F6 paths. No advisory endpoint.
-No API key configuration. No HTTP client. No run integration. No persistence.
+No run integration. No persistence.
 
-**F7.4** will handle the provider execution boundary.
+---
+
+## DeepSeek provider execution boundary (F7.4)
+
+F7.4 implements a **network-capable** provider execution boundary for DeepSeek
+advisory. It can perform at most **one** HTTPS POST per invocation when a
+server-side API key is configured. The test suite uses an injectable fake
+transport and **never** sends live requests to DeepSeek.
+
+### Configuration
+
+| Item | Value |
+|------|--------|
+| Environment variable | `DEEPSEEK_API_KEY` only |
+| Config type | `DeepSeekProviderConfig` (api_key only) |
+| Loader | `load_deepseek_provider_config(environ=None)` |
+
+Rules:
+
+- Missing or blank key → `None` (no crash on import/startup)
+- Key is never shown in `str`/`repr`, never stored in artifacts/errors/logs
+- Config does **not** accept model, URL, timeout, or provider parameters
+- Environment access is limited to the config loader
+- The executor receives config **explicitly** (no hidden global read)
+- `/ready` does **not** depend on provider configuration or availability
+- Key is never accepted from browser, request body, context pack, or `.env`
+  parsing inside the executor (loader may receive an explicit mapping in tests)
+
+### Fixed destination and limits
+
+| Item | Value |
+|------|--------|
+| Endpoint | `https://api.deepseek.com/chat/completions` (POST only) |
+| Model | `deepseek-v4-flash` (server-owned; not from env/caller) |
+| Timeout | `60.0` seconds (RIFTLESS policy; not a provider SLA claim) |
+| Max request body | `65536` bytes (reject before network) |
+| Max HTTP response body | `131072` bytes (bounded read limit+1) |
+| Retries | **None** — one attempt per invocation |
+
+Caller cannot override URL, scheme, host, path, headers, proxy, TLS, timeout,
+or model. There is no URL override from environment (SSRF prevention).
+
+### Transport
+
+- Protocol: `DeepSeekTransport.post(...)` (injectable for tests)
+- Concrete: `StdlibDeepSeekHTTPSTransport` via Python stdlib
+  (`urllib.request`, `ssl`, `socket`)
+- TLS: `ssl.create_default_context()` — verification **enabled**
+- Redirects: **disabled** (Authorization never forwarded)
+- Proxies: empty `ProxyHandler` — `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`
+  ignored
+- No cookies; no compression preference; response always closed
+- No third-party HTTP client or provider SDK
+
+### Wire payload
+
+`build_deepseek_wire_payload(request)` maps F7.3 internal fields to:
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "messages": [/* system then user */],
+  "response_format": {"type": "json_object"},
+  "temperature": 0.0,
+  "max_tokens": 1200,
+  "thinking": {"type": "disabled"},
+  "stream": false
+}
+```
+
+Does **not** send tools, tool_choice, reasoning_effort, API key, or internal
+tokens (`thinking_mode`, `max_output_tokens`, bare `json_object` string,
+`request_contract_version`). Serialization is canonical UTF-8 JSON (sorted
+keys, stable separators, `allow_nan=false`). Authorization is only:
+
+`Authorization: Bearer <api_key>` on the transport headers — never in the body.
+
+### Execution flow
+
+`execute_deepseek_advisory(context, *, config, transport) -> AdvisoryArtifact`
+
+1. `config is None` → noncompleted `unavailable` / `provider_not_configured`
+   (no network)
+2. Build F7.3 request → wire payload → size check
+3. One transport POST
+4. Map transport errors / HTTP status / Content-Type
+5. Extract chat.completion assistant content (strict envelope)
+6. Parse with F7.3 `parse_deepseek_advisory_response`
+7. `build_completed_advisory_artifact` or `build_noncompleted_advisory_artifact`
+
+### Provider envelope (HTTP 200 + application/json)
+
+Requires `object=chat.completion`, `model=deepseek-v4-flash`, exactly one
+choice at index 0, `message.role=assistant`, nonblank content ≤ 32768 chars,
+`finish_reason=stop` to continue parsing. Nonempty `reasoning_content` or
+`tool_calls` rejected. Provider `id` / `usage` / `system_fingerprint` are
+ignored and never stored on the artifact.
+
+### Selected HTTP / finish-reason mappings
+
+| Condition | execution_status | code |
+|-----------|------------------|------|
+| HTTP 401 | error | `provider_authentication_failed` |
+| HTTP 402 | unavailable | `provider_balance_unavailable` |
+| HTTP 429 | unavailable | `provider_rate_limited` |
+| HTTP 500/503 | unavailable | `provider_unavailable` |
+| finish `length` | error | `provider_output_truncated` |
+| finish `content_filter` | error | `provider_output_filtered` |
+| Transport timeout | unavailable | `provider_timeout` |
+
+Provider error bodies and request IDs are never copied into status detail.
+
+### Authority
+
+Advisory remains independent of risk/validation:
+
+- `authority = advisory_only`
+- `risk_effect = none`
+- `validation_effect = none`
+- `deployment_authorized = false`
+
+ALLOW + advisory unavailable stays ALLOW + unavailable advisory. Model output
+is still untrusted natural language.
+
+### Not in F7.4
+
+- Advisory HTTP endpoint
+- `/runs/analyze` integration (planned F7.5)
+- Live API smoke tests
+- Retries / backoff / circuit breaker / streaming / tools
+- Persistence / retrieval
+- OpenAI or DeepSeek SDKs
+- Frontend wiring
+
+OpenAPI production routes remain the six F6 paths.
 
 ---
 
