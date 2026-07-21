@@ -1,5 +1,12 @@
 """Shared Pydantic schemas for the RIFTLESS API."""
 
+from app.schemas.advisory import (
+    AdvisoryArtifact,
+    AdvisoryContent,
+    AdvisoryContextPack,
+    AdvisoryExecutionStatus,
+    AdvisoryStatusDetail,
+)
 from app.schemas.changes import ChangeIntakeData, ChangeIntakeRequest
 from app.schemas.common import ErrorBody, ErrorResponse, SuccessResponse
 from app.schemas.dbt_validation import DbtParseInput, MAX_MODEL_SQL_LENGTH
@@ -30,6 +37,11 @@ from app.schemas.validation_api import ValidationExecutionMeta, validation_execu
 from app.schemas.validation_plan import ValidationPlanChecks, ValidationPlanInput
 
 __all__ = [
+    "AdvisoryArtifact",
+    "AdvisoryContent",
+    "AdvisoryContextPack",
+    "AdvisoryExecutionStatus",
+    "AdvisoryStatusDetail",
     "AnalysisRunData",
     "AnalysisRunRequest",
     "ChangeIntakeData",

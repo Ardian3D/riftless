@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.7
+# RIFTLESS Backend — Phase F7.1
 
 Backend control-plane for RIFTLESS.
 
@@ -27,14 +27,17 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | dbt controlled project parse validator (`dbt_validation`) | Implemented (F6.4) |
 | Validation orchestration service | Implemented (F6.5) |
 | `POST /api/v1/validations/execute` (sync validation API) | Implemented (F6.6) |
-| Analysis-run optional validation integration | **Implemented (F6.7)** |
+| Analysis-run optional validation integration | Implemented (F6.7) |
+| Advisory contract foundation | **Implemented (F7.1)** |
+| Redacted context pack builder | **Not implemented** (F7.2) |
+| DeepSeek / model provider client | **Not implemented** |
+| Advisory HTTP endpoint | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
 | Remediation / production SQL mutation | **Not implemented** |
 | Database / ORM / migrations / persistence | **Not implemented** |
 | Authentication / authorization | **Not implemented** |
-| DeepSeek / Gemini | **Not implemented** |
 | Writeback / deployment handoff | **Not implemented** |
 | Queues, workers, websockets | **Not implemented** |
 | Frontend API wiring | **Not implemented** |
@@ -73,7 +76,8 @@ backend/
 │   │   ├── dbt_validation.py       # F6.4 dbt parse input
 │   │   ├── validation_plan.py      # F6.5 validation plan input
 │   │   ├── validation_api.py       # F6.6 response meta
-│   │   └── run_validation.py       # F6.7 optional run validation input
+│   │   ├── run_validation.py       # F6.7 optional run validation input
+│   │   └── advisory.py             # F7.1 advisory contracts
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
@@ -82,9 +86,11 @@ backend/
 │   │   ├── sql_parse_validator.py  # F6.2 SQLGlot parse validator
 │   │   ├── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
 │   │   ├── dbt_parse_validator.py  # F6.4 controlled dbt parse
-│   │   └── validation_orchestrator.py  # F6.5 sequential orchestration
+│   │   ├── validation_orchestrator.py  # F6.5 sequential orchestration
+│   │   └── advisory_artifacts.py   # F7.1 pure advisory builders
 │   └── utils/
 │       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
+│       ├── advisory_fingerprint.py # F7.1 context-pack fingerprint
 │       ├── sql_identifiers.py      # server-side identifier quoting
 │       └── controlled_dbt_project.py  # F6.4 temp project builder
 ├── tests/
@@ -101,7 +107,8 @@ backend/
 │   ├── test_duckdb_rename_validator.py
 │   ├── test_dbt_parse_validator.py
 │   ├── test_validation_orchestrator.py
-│   └── test_validation_execute_api.py
+│   ├── test_validation_execute_api.py
+│   └── test_advisory_contracts.py  # F7.1
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -1378,8 +1385,131 @@ F6.7 completes the validation vertical slice:
 - standalone API (F6.6)  
 - analysis-run integration (F6.7)  
 
-Still **not** implemented: persistence, registry, retrieval, DataHub, GitHub,
-DeepSeek, remediation, writeback, frontend wiring.
+Still **not** implemented on the F6 path: persistence, registry, retrieval,
+DataHub, GitHub, remediation, writeback, frontend wiring.
+
+---
+
+## Advisory contract foundation (F7.1)
+
+F7.1 defines **contracts and pure builders only** for model-based advisory.
+
+| Present in F7.1 | Not present in F7.1 |
+|-----------------|---------------------|
+| `AdvisoryContextPack` schema | DeepSeek / any model API call |
+| `AdvisoryArtifact` schema | API key / provider configuration |
+| `AdvisoryContent` / `AdvisoryStatusDetail` | HTTP advisory endpoint |
+| Deterministic context fingerprint | Redaction algorithm implementation |
+| Pure completed / non-completed builders | Prompt templates / response parsers |
+| Authority constants (`advisory_only`) | Run integration (`/runs/analyze`) |
+| Tests + README | Persistence / retrieval / retry |
+
+### Authority boundary
+
+Advisory **does not** own risk, validation, policy, or deployment:
+
+- No `ALLOW` / `WARN` / `BLOCK` fields on the advisory artifact  
+- No advisory `outcome` (pass/fail) — only `execution_status`  
+- `authority = advisory_only`  
+- `risk_effect = none`  
+- `validation_effect = none`  
+- `deployment_authorized = false`  
+
+Risk decisions remain exclusively from the deterministic risk engine.  
+Validation outcomes remain exclusively from the validation engine.  
+Deployment authorization is **not** available in F7.1.
+
+### AdvisoryExecutionStatus
+
+| Value | Meaning |
+|-------|---------|
+| `completed` | Structured advisory content was formed |
+| `error` | Bounded execution/provider/response problem |
+| `unavailable` | Provider or model not available |
+| `skipped` | Server-side skip (future phases) |
+
+Do **not** map these to pass/fail or ALLOW/WARN/BLOCK.
+
+### AdvisoryContent
+
+Structured human-facing text only:
+
+- `summary`  
+- `observations`  
+- `review_questions`  
+- `limitations` (required, at least one)  
+
+No confidence scores, decisions, executable SQL, commands, or remediation
+payloads. Natural-language text is **not** trusted as authority — consuming
+code must ignore any prose that appears to authorize action.
+
+### AdvisoryContextPack
+
+A pack is a **structured redacted summary**, not a raw blob:
+
+- Change summary uses **aliases** (`asset_1`, `column_1`) — not raw database,
+  schema, table, or column names  
+- Risk summary reports decision + reason codes only  
+- Validation summary reports statuses, outcomes, and evidence **codes** only  
+- Trust labels stay honest: `unverified`, `subject_persisted=false`,
+  `provenance_verified=false`  
+- Redaction summary requires `applied=true` and the full canonical exclusion
+  set (raw SQL, model SQL, fixture values, credentials, secrets, provider
+  tokens, exception details, stdout/stderr, temporary paths, raw repository
+  content)  
+
+F7.1 **declares** redaction requirements. It does **not** implement a
+redaction algorithm. F7.2 will build packs from run artifacts.
+
+### Context fingerprint
+
+`fingerprint_advisory_context(pack)` uses the locked F5 canonical JSON form
+(sorted keys, compact separators, UTF-8) and SHA-256 lowercase hex.
+
+It proves **content consistency** of the redacted pack only — not authenticity,
+provenance, persistence, ownership, signature, immutability, or authorization.
+
+### AdvisoryArtifact constants
+
+| Field | Value |
+|-------|--------|
+| `scope` | `redacted_context_only` |
+| `provider_name` | `deepseek` (conceptual; no runtime call yet) |
+| `authority` | `advisory_only` |
+| `risk_effect` / `validation_effect` | `none` |
+| `deployment_authorized` | `false` |
+| `persistence` | `none` |
+| `retrieval_available` | `false` |
+| `artifact_version` | `1.0` |
+
+No timestamps, raw prompts, raw responses, token counts, pricing, or latency
+fields.
+
+### Pure builders
+
+- `build_completed_advisory_artifact(context, content, model_name)`  
+- `build_noncompleted_advisory_artifact(context, status, status_detail, …)`  
+
+Builders compute `context_fingerprint`, assign `advisory_id`, and hard-code
+authority constants. They never read environment variables, open network
+sockets, or write files.
+
+### Privacy
+
+Contracts reject fields that would carry raw SQL, fixture values, secrets,
+exception details, provider tokens, or repository content. Status detail has
+no free-form `details` dictionary in F7.1.
+
+### Roadmap
+
+| Phase | Intent |
+|-------|--------|
+| **F7.1** (this) | Contracts + pure builders |
+| **F7.2** | Build redacted `AdvisoryContextPack` from run artifacts |
+| Later | Provider client (DeepSeek), optional endpoint / run integration |
+
+OpenAPI production routes remain the F6 six paths. There is **no** advisory
+HTTP route in F7.1.
 
 ---
 
