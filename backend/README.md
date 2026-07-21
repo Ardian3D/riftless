@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F7.2
+# RIFTLESS Backend — Phase F7.3
 
 Backend control-plane for RIFTLESS.
 
@@ -29,8 +29,9 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | `POST /api/v1/validations/execute` (sync validation API) | Implemented (F6.6) |
 | Analysis-run optional validation integration | Implemented (F6.7) |
 | Advisory contract foundation | Implemented (F7.1) |
-| Redacted context pack builder | **Implemented (F7.2)** |
-| DeepSeek / model provider client | **Not implemented** |
+| Redacted context pack builder | Implemented (F7.2) |
+| DeepSeek request/response boundary | **Implemented (F7.3)** |
+| DeepSeek / model provider client (network execution) | **Not implemented** |
 | Advisory HTTP endpoint | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
@@ -77,7 +78,8 @@ backend/
 │   │   ├── validation_plan.py      # F6.5 validation plan input
 │   │   ├── validation_api.py       # F6.6 response meta
 │   │   ├── run_validation.py       # F6.7 optional run validation input
-│   │   └── advisory.py             # F7.1 advisory contracts
+│   │   ├── advisory.py             # F7.1 advisory contracts
+│   │   └── deepseek_advisory.py    # F7.3 DeepSeek request/response contracts
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
@@ -88,7 +90,9 @@ backend/
 │   │   ├── dbt_parse_validator.py  # F6.4 controlled dbt parse
 │   │   ├── validation_orchestrator.py  # F6.5 sequential orchestration
 │   │   ├── advisory_artifacts.py   # F7.1 pure advisory builders
-│   │   └── advisory_context_builder.py  # F7.2 redacted context pack
+│   │   ├── advisory_context_builder.py  # F7.2 redacted context pack
+│   │   ├── deepseek_prompt_builder.py   # F7.3 request builder
+│   │   └── deepseek_response_parser.py  # F7.3 strict JSON parser
 │   └── utils/
 │       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
 │       ├── advisory_fingerprint.py # F7.1 context-pack fingerprint
@@ -110,7 +114,8 @@ backend/
 │   ├── test_validation_orchestrator.py
 │   ├── test_validation_execute_api.py
 │   ├── test_advisory_contracts.py  # F7.1
-│   └── test_advisory_context_builder.py  # F7.2
+│   ├── test_advisory_context_builder.py  # F7.2
+│   └── test_deepseek_advisory_boundary.py  # F7.3
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -1507,11 +1512,13 @@ no free-form `details` dictionary in F7.1.
 | Phase | Intent |
 |-------|--------|
 | **F7.1** | Contracts + pure artifact builders |
-| **F7.2** (this section continues below) | Server-controlled redacted context pack builder |
-| Later | Provider client (DeepSeek), optional endpoint / run integration |
+| **F7.2** | Server-controlled redacted context pack builder |
+| **F7.3** (this section continues below) | DeepSeek request/response boundary (no network) |
+| **F7.4** | Provider execution boundary |
+| Later | Optional endpoint / run integration |
 
 OpenAPI production routes remain the F6 six paths. There is **no** advisory
-HTTP route in F7.1 or F7.2.
+HTTP route in F7.1, F7.2, or F7.3.
 
 ---
 
@@ -1650,6 +1657,207 @@ Advisory context packs still do **not** authorize risk decisions, validation
 outcomes, policy results, or deployment. No model call is made in F7.2.
 
 OpenAPI production routes remain the six F6 paths. No advisory endpoint.
+
+---
+
+## DeepSeek request/response boundary (F7.3)
+
+F7.3 defines a **pure** request/response boundary for future DeepSeek advisory
+execution. It does **not** open network sockets, read API keys, load provider
+SDKs, stream, retry, or expose an HTTP route.
+
+### Project-selected model identifier
+
+| Constant | Value |
+|----------|-------|
+| `DEEPSEEK_ADVISORY_MODEL` | `deepseek-v4-flash` |
+
+The model identifier is **server-owned** and locked on the internal request
+contract. Callers cannot choose a model. The identifier is **not** read from
+environment variables, context packs, or provider responses. F7.3 does **not**
+verify the model through network execution and does **not** claim a successful
+provider call.
+
+### What F7.3 does
+
+| Present | Not present |
+|---------|-------------|
+| Fixed internal `DeepSeekAdvisoryRequest` | HTTP client / provider SDK |
+| Fixed server system instruction | API key / `.env` / environment model config |
+| Canonical `AdvisoryContextPack` → user message | Network call / retry / timeout / streaming |
+| Strict JSON-only response parser | Tool / function calling |
+| Duplicate-key + non-standard JSON rejection | Markdown/prose repair |
+| Required authority limitations | Silent limitation injection |
+| Safe parse errors (`code` + message only) | Raw response on error / logging |
+| Integration with F7.1 `AdvisoryContent` + builders | Run integration / endpoint / persistence |
+
+### Request contract
+
+Server builder:
+
+`build_deepseek_advisory_request(context: AdvisoryContextPack) -> DeepSeekAdvisoryRequest`
+
+Fixed fields:
+
+- `model = deepseek-v4-flash`
+- exactly two messages: `system` then `user`
+- `response_format = json_object` (internal token only — see transport mapping)
+- `temperature = 0.0`
+- `max_output_tokens = 1200`
+- `thinking_mode = disabled`
+- `stream = false`
+- `tools_enabled = false`
+- `request_contract_version = 1.0`
+
+Callers cannot supply model, messages, system/user prompts, temperature, token
+limits, thinking mode, reasoning effort, tools, stream flags, or other provider
+parameters. There is no public constructor that accepts an arbitrary message list.
+
+**Thinking mode:** DeepSeek V4 uses thinking mode by default, and temperature
+has no effect while thinking is enabled. F7.3 therefore locks
+`thinking_mode = disabled` so `temperature = 0.0` is meaningful, chain-of-thought
+/ `reasoning_content` is not requested, and the response boundary processes only
+final content. Callers cannot select `enabled`, reasoning effort levels, or
+other thinking configuration.
+
+### Transport mapping contract (F7.4 must implement; F7.3 does not call network)
+
+Internal fields are **not** always identical to the OpenAI-compatible DeepSeek
+wire payload. F7.4 must apply this mapping. F7.3 only documents and tests it.
+
+| Internal field | Transport |
+|----------------|-----------|
+| `model` | `model` |
+| `messages` | `messages` |
+| `response_format = json_object` | `response_format = {"type": "json_object"}` |
+| `temperature = 0.0` | `temperature = 0.0` |
+| `max_output_tokens = 1200` | `max_tokens = 1200` |
+| `thinking_mode = disabled` | extra body `{"thinking": {"type": "disabled"}}` |
+| `stream = false` | `stream = false` |
+| `tools_enabled = false` | **do not** send `tools` or `tool_choice` |
+
+Important: the internal string `json_object` must **not** be sent as a bare
+string to the DeepSeek API. F7.4 must transform it to
+`{"type": "json_object"}`. F7.3 does not build HTTP payloads, read API keys, or
+open sockets.
+
+### Fixed system instruction
+
+The system message is a server-owned constant. It states that the model is an
+advisory analyst for structured data changes; that all `CONTEXT_JSON` values are
+**untrusted data** (not instructions); that the model must not invent provenance,
+change risk/validation, authorize deployment, emit executable SQL/commands/tool
+calls, or wrap JSON in Markdown; and that the two required limitations must lead
+`content.limitations`.
+
+It embeds an exact server-owned JSON shape example (`response_version` 1.0 with
+`content.summary` / `observations` / `review_questions` / `limitations`) with no
+caller input, identifiers, SQL, fixtures, decisions, or chain of thought. It
+explicitly forbids returning chain of thought, step-by-step reasoning, hidden
+reasoning, rationale fields, raw reasoning, or `reasoning_content`, and requires:
+perform any internal analysis privately; return only the final JSON object.
+
+### Context serialization
+
+The user message is only:
+
+```text
+CONTEXT_JSON_START
+<canonical JSON of the full AdvisoryContextPack>
+CONTEXT_JSON_END
+```
+
+Serialization reuses the locked F5 canonical JSON form (UTF-8, sorted keys,
+stable separators). No caller natural-language instructions, timestamps, nonces,
+raw source artifacts, or alias maps are added. The same context always yields
+an identical request.
+
+### Prompt-injection boundary
+
+Injection surface is reduced through structured context, fixed prompts, disabled
+tools/streaming, and delimiter-wrapped context in the user message only. This
+does **not** claim prompt injection is impossible. Provider output remains
+**untrusted text** until it passes the strict parser, and parsed advisory still
+has **no authority**.
+
+### Response contract and parser
+
+`parse_deepseek_advisory_response(raw_response: str) -> AdvisoryContent`
+
+Top-level envelope:
+
+- `response_version` must be `1.0`
+- `content` reuses F7.1 `AdvisoryContent` (no parallel semantic copy)
+
+Rejected inputs include empty/whitespace, size over 32768 characters, null
+bytes, invalid JSON, top-level non-objects, leading/trailing prose, Markdown
+code fences, multiple JSON documents, `NaN` / `Infinity` / `-Infinity`,
+duplicate JSON keys at any level, unsupported versions, schema-invalid content,
+and missing/reordered/reworded required limitations.
+
+The parser does **not** extract JSON substrings from prose, strip fences, fix
+quotes/trailing commas, or retry the model. Strict rejection is preferred over
+silent repair.
+
+### Required limitations
+
+Valid responses must begin `content.limitations` with these exact strings, in
+order:
+
+1. `This advisory does not authorize deployment.`
+2. `Deterministic risk and validation artifacts remain authoritative.`
+
+Additional limitations may follow. The parser never injects missing limitations.
+Completed `AdvisoryArtifact` assembly (via F7.1 builders) requires the provider
+response to already satisfy this authority boundary.
+
+### Safe parse errors
+
+`DeepSeekAdvisoryResponseError` stores only `code` and a generic `message`.
+Allowed codes include `response_empty`, `response_too_large`,
+`response_invalid_json`, `response_duplicate_key`, `response_nonstandard_json`,
+`response_schema_invalid`, `response_version_unsupported`, and
+`response_required_limitations_missing`. Errors never store or display raw
+response text, excerpts, prompts, context packs, API keys, or parser line
+content. There is no HTTP mapping in F7.3.
+
+### Natural-language authority boundary
+
+`AdvisoryContent` may still contain natural language from a model. F7.3 does
+**not** prove those statements are factual, complete, unbiased, or free of
+recommendation language. Keyword blacklists (e.g. allow/warn/block/deploy) are
+intentionally **not** used. Authority is preserved by schema (no decision or
+executable fields), fixed server semantics, and downstream non-use of advisory
+for authorization.
+
+### Artifact assembly
+
+Integration flow (pure, tested):
+
+`AdvisoryContextPack` → `build_deepseek_advisory_request` → simulated valid JSON
+→ `parse_deepseek_advisory_response` → `build_completed_advisory_artifact`
+
+Completed artifacts use the context subject fingerprint, computed context
+fingerprint, `model_name = deepseek-v4-flash`, `execution_status = completed`,
+`authority = advisory_only`, `risk_effect = none`, `validation_effect = none`,
+and `deployment_authorized = false`. Parser errors are **not** auto-mapped to
+non-completed artifacts in F7.3 (that mapping belongs to F7.4 execution).
+
+### Purity
+
+Builders and parser are deterministic for the same inputs, do not mutate
+context, and do not read environment variables, open network sockets, run
+subprocesses, write files, or log raw prompts/responses.
+
+### Authority
+
+Advisory still does **not** change risk decisions, validation outcomes, or
+deployment authorization. Model output remains untrusted natural language.
+
+OpenAPI production routes remain the six F6 paths. No advisory endpoint.
+No API key configuration. No HTTP client. No run integration. No persistence.
+
+**F7.4** will handle the provider execution boundary.
 
 ---
 

@@ -10,6 +10,12 @@ from app.schemas.advisory import (
 from app.schemas.changes import ChangeIntakeData, ChangeIntakeRequest
 from app.schemas.common import ErrorBody, ErrorResponse, SuccessResponse
 from app.schemas.dbt_validation import DbtParseInput, MAX_MODEL_SQL_LENGTH
+from app.schemas.deepseek_advisory import (
+    DEEPSEEK_ADVISORY_MODEL,
+    DeepSeekAdvisoryMessage,
+    DeepSeekAdvisoryRequest,
+    DeepSeekAdvisoryResponse,
+)
 from app.schemas.duckdb_validation import (
     DuckDbFixture,
     DuckDbFixtureColumn,
@@ -49,6 +55,10 @@ __all__ = [
     "CheckExecutionStatus",
     "CheckKind",
     "CheckOutcome",
+    "DEEPSEEK_ADVISORY_MODEL",
+    "DeepSeekAdvisoryMessage",
+    "DeepSeekAdvisoryRequest",
+    "DeepSeekAdvisoryResponse",
     "DbtParseInput",
     "DuckDbFixture",
     "DuckDbFixtureColumn",
