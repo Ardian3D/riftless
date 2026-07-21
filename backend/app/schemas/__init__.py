@@ -21,6 +21,7 @@ from app.schemas.validation import (
     ValidationCheckResult,
     ValidationEvidence,
 )
+from app.schemas.validation_plan import ValidationPlanChecks, ValidationPlanInput
 
 __all__ = [
     "AnalysisRunData",
@@ -48,4 +49,6 @@ __all__ = [
     "ValidationArtifact",
     "ValidationCheckResult",
     "ValidationEvidence",
+    "ValidationPlanChecks",
+    "ValidationPlanInput",
 ]

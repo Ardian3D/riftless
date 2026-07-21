@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.4
+# RIFTLESS Backend — Phase F6.5
 
 Backend control-plane for RIFTLESS.
 
@@ -24,7 +24,8 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | Validation domain contracts (schemas + aggregation) | Implemented (F6.1) |
 | SQLGlot SQL parse validator (`sql_parse`) | Implemented (F6.2) |
 | DuckDB in-memory rename validator (`duckdb_execution`) | Implemented (F6.3) |
-| dbt controlled project parse validator (`dbt_validation`) | **Implemented (F6.4)** |
+| dbt controlled project parse validator (`dbt_validation`) | Implemented (F6.4) |
+| Validation orchestration service | **Implemented (F6.5)** |
 | Validation HTTP endpoint | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
@@ -67,7 +68,8 @@ backend/
 │   │   ├── validation.py           # F6.1 validation contracts
 │   │   ├── sql_validation.py       # F6.2 SQL dialect + parse input
 │   │   ├── duckdb_validation.py    # F6.3 fixture + rename input
-│   │   └── dbt_validation.py       # F6.4 dbt parse input
+│   │   ├── dbt_validation.py       # F6.4 dbt parse input
+│   │   └── validation_plan.py      # F6.5 validation plan input
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
@@ -75,7 +77,8 @@ backend/
 │   │   ├── validation_engine.py    # F6.1 deterministic aggregation
 │   │   ├── sql_parse_validator.py  # F6.2 SQLGlot parse validator
 │   │   ├── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
-│   │   └── dbt_parse_validator.py  # F6.4 controlled dbt parse
+│   │   ├── dbt_parse_validator.py  # F6.4 controlled dbt parse
+│   │   └── validation_orchestrator.py  # F6.5 sequential orchestration
 │   └── utils/
 │       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
 │       ├── sql_identifiers.py      # server-side identifier quoting
@@ -92,7 +95,8 @@ backend/
 │   ├── test_validation_contracts.py
 │   ├── test_sql_parse_validator.py
 │   ├── test_duckdb_rename_validator.py
-│   └── test_dbt_parse_validator.py
+│   ├── test_dbt_parse_validator.py
+│   └── test_validation_orchestrator.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -1022,6 +1026,99 @@ messages never appear in `ValidationCheckResult` evidence or summary.
 - **No** production validation route  
 - **Not** connected to `POST /api/v1/runs/analyze`  
 - Existing endpoints unchanged  
+
+---
+
+## Validation orchestration (F6.5)
+
+F6.5 adds an **internal** validation orchestration service that composes the
+real F6.2–F6.4 validators into one `ValidationArtifact` using F6.1 aggregation.
+
+| In scope | Out of scope |
+|----------|--------------|
+| `ValidationPlanInput` contract | Validation HTTP endpoint |
+| Fingerprint consistency check | Analysis-run wiring |
+| Cross-artifact invariants | Persistence / artifact registry |
+| Fixed sequential orchestration | Parallel / queued execution |
+| F6.1 aggregation reuse | Plugin registry / dynamic discovery |
+| Unit + one real integration test | DataHub / GitHub / DeepSeek |
+
+### Fixed check order
+
+1. `sql_parse` (SQLGlot)  
+2. `duckdb_execution` (in-memory rename)  
+3. `dbt_validation` (controlled project parse)  
+
+Order is **not** re-sorted by PASS/FAIL, required flag, or caller preference.
+There is **no short-circuit**: when the plan is valid, all three validators run
+even if an earlier check returns FAIL, ERROR, UNAVAILABLE, SKIPPED, or
+INCONCLUSIVE. Each check has a different scope and may contribute independent
+evidence.
+
+### Plan invariants (before any validator runs)
+
+1. Recompute the F5 fingerprint of `intake_reference.normalized_change` and
+   require an exact match with `content_fingerprint`.  
+2. `duckdb_execution.normalized_change` must be semantically identical to
+   `intake_reference.normalized_change`.  
+3. `sql_parse.sql` must equal `dbt_validation.model_sql` with **exact** string
+   equality (no trim, format, case fold, or AST comparison).  
+
+Invalid plans are rejected; **no** check runs and **no** partial artifact is
+returned. Mismatch errors do not reveal the expected fingerprint, canonical
+JSON, raw SQL, or fixture values.
+
+### Intake reference trust
+
+The intake reference remains **caller-provided** and **unverified**:
+
+- Fingerprint match proves **content consistency only**  
+- It does **not** prove registry storage, durable provenance, authorization,
+  signature, or tamper-proof history  
+
+Those trust fields are **not** added to the F6.1 `ValidationArtifact`.
+
+### Required vs optional
+
+Each check keeps its own `required` flag from the plan inputs. Optional check
+errors affect overall **execution completeness** (e.g. `PARTIAL`) but do not
+turn required PASS into FAIL. Example:
+
+- required SQLGlot PASS  
+- required DuckDB PASS  
+- optional dbt ERROR / UNAVAILABLE  
+
+→ overall `execution_status = partial`, overall `outcome = pass` (F6.1 rules).
+
+### Result contract
+
+`orchestrate_validation(plan) -> ValidationArtifact` with:
+
+- server-generated `validation_id`  
+- `subject_fingerprint` from the consistency-checked intake fingerprint  
+- `scope = provided_artifacts_only`  
+- always three checks for a valid plan, in fixed order  
+- `artifact_version = 1.0`  
+- **not** persisted; no timestamp; no retrieval URL  
+
+### Trust / claim boundary
+
+| PASS means | PASS does **not** mean |
+|------------|------------------------|
+| SQLGlot: syntax check limited to declared dialect | SQL is production-safe |
+| DuckDB: rename succeeded on the supplied in-memory fixture | production schema is correct |
+| dbt: controlled project produced the expected model manifest | `dbt run` / deployment is authorized |
+| Overall PASS: required checks that completed all passed | deployment authorization |
+
+The orchestrator does not claim DataHub verification, GitHub origin, production
+fixture provenance, or universal validation completion.
+
+### Wiring status
+
+- **No** production validation route  
+- **Not** connected to `POST /api/v1/runs/analyze`  
+- Existing endpoints unchanged  
+- No new runtime dependencies  
 
 ---
 
