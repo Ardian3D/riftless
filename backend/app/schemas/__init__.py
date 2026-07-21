@@ -10,6 +10,11 @@ from app.schemas.duckdb_validation import (
     DuckDbRenameInput,
 )
 from app.schemas.risk import RiskEvaluateRequest, RiskEvaluationData
+from app.schemas.run_validation import (
+    RunDuckDbCheckInput,
+    RunValidationChecks,
+    RunValidationInput,
+)
 from app.schemas.runs import AnalysisRunData, AnalysisRunRequest
 from app.schemas.sql_validation import MAX_SQL_LENGTH, SqlDialect, SqlParseInput
 from app.schemas.validation import (
@@ -44,6 +49,9 @@ __all__ = [
     "OverallExecutionStatus",
     "RiskEvaluateRequest",
     "RiskEvaluationData",
+    "RunDuckDbCheckInput",
+    "RunValidationChecks",
+    "RunValidationInput",
     "SqlDialect",
     "SqlParseInput",
     "SuccessResponse",

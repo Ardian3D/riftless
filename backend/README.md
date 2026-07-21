@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.6
+# RIFTLESS Backend — Phase F6.7
 
 Backend control-plane for RIFTLESS.
 
@@ -26,7 +26,8 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | DuckDB in-memory rename validator (`duckdb_execution`) | Implemented (F6.3) |
 | dbt controlled project parse validator (`dbt_validation`) | Implemented (F6.4) |
 | Validation orchestration service | Implemented (F6.5) |
-| `POST /api/v1/validations/execute` (sync validation API) | **Implemented (F6.6)** |
+| `POST /api/v1/validations/execute` (sync validation API) | Implemented (F6.6) |
+| Analysis-run optional validation integration | **Implemented (F6.7)** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
@@ -71,11 +72,12 @@ backend/
 │   │   ├── duckdb_validation.py    # F6.3 fixture + rename input
 │   │   ├── dbt_validation.py       # F6.4 dbt parse input
 │   │   ├── validation_plan.py      # F6.5 validation plan input
-│   │   └── validation_api.py       # F6.6 response meta
+│   │   ├── validation_api.py       # F6.6 response meta
+│   │   └── run_validation.py       # F6.7 optional run validation input
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
-│   │   ├── run_orchestrator.py
+│   │   ├── run_orchestrator.py     # F5.3 + F6.7 optional validation
 │   │   ├── validation_engine.py    # F6.1 deterministic aggregation
 │   │   ├── sql_parse_validator.py  # F6.2 SQLGlot parse validator
 │   │   ├── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
@@ -93,7 +95,7 @@ backend/
 │   ├── test_contracts.py
 │   ├── test_change_intake.py
 │   ├── test_risk_evaluate.py
-│   ├── test_runs_analyze.py
+│   ├── test_runs_analyze.py        # F5.3 + F6.7
 │   ├── test_validation_contracts.py
 │   ├── test_sql_parse_validator.py
 │   ├── test_duckdb_rename_validator.py
@@ -378,7 +380,7 @@ If incomplete context is also supplied, WARN reasons are still listed; decision 
 
 ---
 
-## Synchronous analysis run (F5.3)
+## Synchronous analysis run (F5.3 / F6.7)
 
 ### Endpoint
 
@@ -387,9 +389,10 @@ POST /api/v1/runs/analyze
 ```
 
 - **HTTP 200** on success (synchronous result returned in the same request)  
-- In-process orchestration of F5.1 intake → F5.2 risk evaluation  
+- In-process orchestration of F5.1 intake → F5.2 risk evaluation → optional F6 validation  
 - **No** HTTP loopback to internal endpoints  
-- **No** persistence, run retrieval, queue, worker, AI, SQL, DataHub, or GitHub  
+- **No** persistence, run retrieval, queue, worker, AI, DataHub, or GitHub  
+- Handler is a synchronous `def` (blocking DuckDB/dbt run off the event loop)  
 
 ### Flow
 
@@ -399,10 +402,11 @@ Change submitted
 → Change normalized + fingerprint
 → Request-local intake reference (current request only)
 → Risk rules evaluated (F5.2 service)
-→ ALLOW / WARN / BLOCK returned in one run artifact
+→ Optional: server-composed ValidationPlanInput + F6.5 orchestrator
+→ Run artifact (risk + optional ValidationArtifact)
 ```
 
-### Example request
+### Example request (legacy — no validation)
 
 ```json
 {
@@ -429,7 +433,7 @@ Change submitted
 Clients must **not** send `run_id`, `intake_id`, `evaluation_id`, fingerprints,
 `normalized_change`, `decision`, reasons, approvals, or policy versions.
 
-### Example response (shape)
+### Example response (shape, without validation)
 
 ```json
 {
@@ -455,11 +459,12 @@ Clients must **not** send `run_id`, `intake_id`, `evaluation_id`, fingerprints,
       "policy_version": "1.0",
       "artifact_version": "1.0"
     },
-    "run_artifact_version": "1.0"
+    "validation_artifact": null,
+    "run_artifact_version": "1.1"
   },
   "meta": {
     "operation": "synchronous_analysis_run",
-    "phase": "F5.3",
+    "phase": "F6.7",
     "execution_mode": "in_process",
     "persistence": "none",
     "retrieval_available": false,
@@ -469,16 +474,18 @@ Clients must **not** send `run_id`, `intake_id`, `evaluation_id`, fingerprints,
     "intake_reference_scope": "current_request_only",
     "intake_reference_persisted": false,
     "model_used": false,
+    "deployment_authorized": false,
+    "validation_requested": false,
     "validation_executed": false,
-    "deployment_authorized": false
+    "validation_artifact_present": false
   }
 }
 ```
 
 ### Provenance (honest)
 
-| Concern | F5.3 value | Meaning |
-|---------|------------|---------|
+| Concern | Value | Meaning |
+|---------|-------|---------|
 | Evaluation context | `caller_provided` / `unverified` | Still supplied by the client; not DataHub-backed. |
 | Intake reference | `riftless_runtime` / `current_request_only` / not persisted | Created by RIFTLESS in this request only. **Not** durable provenance, registry match, or tamper-proof storage. |
 | Standalone `POST /risk/evaluate` | still `caller_provided` / `unverified` | Unchanged from F5.2. |
@@ -487,12 +494,15 @@ Clients must **not** send `run_id`, `intake_id`, `evaluation_id`, fingerprints,
 
 - intake finished in the current request  
 - deterministic evaluation finished  
+- optional ValidationArtifact formed when requested  
 - response artifact was assembled  
 
-It does **not** mean ALLOW, validation success, deployment authorization, writeback, or persistence.
+It does **not** mean ALLOW, validation PASS, deployment authorization, writeback, or persistence.
 
 ALLOW / WARN / BLOCK remain scoped to `provided_context_only`.  
-AI is not used. Validation engine is not executed.
+AI is not used.
+
+See **Analysis-run validation integration (F6.7)** below for optional validation.
 
 ---
 
@@ -1242,12 +1252,134 @@ Request may contain SQL and fixture values. Response **must not** echo:
 
 No request-body logging is added.
 
-### Wiring status
+### Wiring status (F6.6)
 
-- **Not** connected to `POST /api/v1/runs/analyze`  
-- Existing F4/F5 endpoints unchanged  
+- Standalone validation execute remains available  
+- Analysis-run optional integration added in F6.7  
 - No GET/list/retry/history validation routes  
 - No new runtime dependencies  
+
+---
+
+## Analysis-run validation integration (F6.7)
+
+F6.7 extends `POST /api/v1/runs/analyze` with an **optional** `validation`
+block. Legacy requests without `validation` remain fully supported.
+
+| In scope | Out of scope |
+|----------|--------------|
+| Optional validation on analysis run | New production routes |
+| Runtime intake as validation subject | Persistence / retrieval |
+| Server-composed `ValidationPlanInput` | Risk decision rewritten by validation |
+| Independent risk + validation results | DataHub / GitHub / DeepSeek |
+| `run_artifact_version` **1.1** | Queue / background / 202 |
+
+### Optional request shape
+
+```json
+{
+  "change": { "…": "F5.1 change" },
+  "evaluation_context": { "…": "F5.2 context" },
+  "validation": {
+    "checks": {
+      "sql_parse": {
+        "sql": "select customer_id as account_id from customers",
+        "dialect": "snowflake",
+        "required": true
+      },
+      "duckdb_execution": {
+        "fixture": {
+          "columns": [
+            { "name": "customer_id", "type": "varchar", "nullable": false }
+          ],
+          "rows": [["customer-1"]]
+        },
+        "required": true
+      },
+      "dbt_validation": {
+        "model_name": "customers_renamed",
+        "model_sql": "select customer_id as account_id from customers",
+        "required": false
+      }
+    }
+  }
+}
+```
+
+Callers **must not** send intake reference, fingerprint, `normalized_change`,
+`validation_id`, outcomes, or engine metadata inside `validation`. DuckDB
+`normalized_change` is always taken from **runtime intake**.
+
+`sql_parse.sql` and `dbt_validation.model_sql` must be **exactly** equal
+(`sql_input_mismatch` → HTTP 422; raw SQL never returned).
+
+### Runtime intake binding
+
+1. F5.1 intake produces `intake_id`, `normalized_change`, fingerprint  
+2. Server builds request-local `IntakeReference`  
+3. F5.2 risk evaluation runs (unchanged rules)  
+4. If validation requested: server builds `ValidationPlanInput` and calls
+   `orchestrate_validation` in-process  
+5. Run artifact includes optional `validation_artifact`  
+
+### Risk and validation are independent
+
+| Scenario | Risk | Validation |
+|----------|------|------------|
+| ALLOW + validation FAIL | ALLOW | FAIL |
+| BLOCK + validation PASS | BLOCK | PASS |
+| BLOCK | still runs validation | not short-circuited |
+
+Validation FAIL does **not** rewrite risk to BLOCK. Risk BLOCK does **not**
+skip validation. PASS is **not** deployment authorization.
+
+### Response (`run_artifact_version = 1.1`)
+
+- `validation_artifact`: `null` when not requested; otherwise F6.1
+  `ValidationArtifact`  
+- `orchestration_status = completed` when requested artifacts were formed —
+  not ALLOW, not validation PASS, not persistence  
+
+### Trust meta (when validation requested)
+
+| Field | Value |
+|-------|-------|
+| `validation_subject_origin` | `riftless_runtime` |
+| `validation_subject_scope` | `current_request_only` |
+| `validation_subject_persisted` | `false` |
+| `validation_input_origin` | `caller_provided` |
+| `validation_input_trust` | `unverified` |
+| `validation_sql_origin` / `validation_fixture_origin` | `caller_provided` |
+| `validation_persistence` | `none` |
+| `validation_retrieval_available` | `false` |
+
+When validation is omitted, those subject/input origin fields are `null` and
+`validation_requested` / `validation_executed` / `validation_artifact_present`
+are `false`.
+
+### Privacy
+
+Response must not echo raw SQL, dbt model SQL, fixture row values, temporary
+paths, or dbt stdout/stderr. No request-body logging.
+
+### Standalone endpoint
+
+`POST /api/v1/validations/execute` remains available for callers that supply
+their own intake reference. Integrated runs never accept caller-chosen
+runtime intake identity.
+
+### F6 lock candidate
+
+F6.7 completes the validation vertical slice:
+
+- contracts (F6.1)  
+- SQLGlot / DuckDB / dbt validators (F6.2–F6.4)  
+- orchestration (F6.5)  
+- standalone API (F6.6)  
+- analysis-run integration (F6.7)  
+
+Still **not** implemented: persistence, registry, retrieval, DataHub, GitHub,
+DeepSeek, remediation, writeback, frontend wiring.
 
 ---
 
