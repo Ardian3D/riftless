@@ -1357,6 +1357,345 @@ def test_validation_result_change_changes_context_fingerprint() -> None:
     assert fingerprint_advisory_context(pack_a) != fingerprint_advisory_context(pack_b)
 
 
+# ---- F7.4A — F6 ValidationArtifact projection compatibility ------------------
+
+
+def _project_validation(
+    intake: ChangeIntakeData,
+    risk: RiskEvaluationData,
+    validation: ValidationArtifact,
+) -> Any:
+    return build_advisory_context_pack(
+        change_intake=intake,
+        risk_evaluation=risk,
+        validation_requested=True,
+        validation_artifact=validation,
+    ).validation
+
+
+def test_f6_completed_pass_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.PASS,
+                required=True,
+            )
+        ],
+    )
+    assert validation.execution_status == OverallExecutionStatus.COMPLETED.value
+    assert validation.outcome == CheckOutcome.PASS.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.execution_status == validation.execution_status
+    assert summary.outcome == validation.outcome
+    assert len(summary.checks) == 1
+    assert summary.checks[0].outcome == "pass"
+
+
+def test_f6_completed_fail_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.FAIL,
+                required=True,
+                evidence=[_evidence(code="rule_fail")],
+            )
+        ],
+    )
+    assert validation.outcome == CheckOutcome.FAIL.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.outcome == validation.outcome
+    assert summary.execution_status == OverallExecutionStatus.COMPLETED.value
+
+
+def test_f6_completed_inconclusive_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.PASS,
+                required=True,
+            ),
+            _check(
+                check_kind=CheckKind.DUCKDB_EXECUTION,
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.INCONCLUSIVE,
+                required=True,
+            ),
+        ],
+    )
+    assert validation.execution_status == OverallExecutionStatus.COMPLETED.value
+    assert validation.outcome == CheckOutcome.INCONCLUSIVE.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.outcome == "inconclusive"
+    assert summary.execution_status == "completed"
+
+
+def test_f6_partial_with_outcome_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.PASS,
+                required=True,
+            ),
+            _check(
+                check_kind=CheckKind.DUCKDB_EXECUTION,
+                execution_status=CheckExecutionStatus.ERROR,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="engine_error")],
+            ),
+        ],
+    )
+    assert validation.execution_status == OverallExecutionStatus.PARTIAL.value
+    assert validation.outcome == CheckOutcome.INCONCLUSIVE.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.execution_status == "partial"
+    assert summary.outcome == "inconclusive"
+    assert summary.checks[1].execution_status == "error"
+    assert summary.checks[1].outcome is None
+
+
+def test_f6_execution_failed_with_inconclusive_projects() -> None:
+    """F6 never nulls overall outcome; execution_failed aggregates to inconclusive."""
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.ERROR,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="engine_error")],
+            )
+        ],
+    )
+    assert validation.execution_status == OverallExecutionStatus.EXECUTION_FAILED.value
+    assert validation.outcome == CheckOutcome.INCONCLUSIVE.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.execution_status == "execution_failed"
+    assert summary.outcome == "inconclusive"
+    # Must not invent FAIL for execution failure.
+    assert summary.outcome != "fail"
+
+
+def test_f6_not_run_empty_checks_projects() -> None:
+    """F6 empty checks → not_run + inconclusive; F7 must accept empty checks."""
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[],
+    )
+    assert validation.execution_status == OverallExecutionStatus.NOT_RUN.value
+    assert validation.outcome == CheckOutcome.INCONCLUSIVE.value
+    assert validation.checks == []
+    summary = _project_validation(intake, risk, validation)
+    assert summary.requested is True
+    assert summary.artifact_present is True
+    assert summary.execution_status == "not_run"
+    assert summary.outcome == "inconclusive"
+    assert summary.checks == []
+
+
+def test_f6_not_run_unavailable_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.UNAVAILABLE,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="sqlglot_unavailable")],
+            )
+        ],
+    )
+    assert validation.execution_status == OverallExecutionStatus.NOT_RUN.value
+    assert validation.outcome == CheckOutcome.INCONCLUSIVE.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.execution_status == "not_run"
+    assert summary.outcome == "inconclusive"
+    assert summary.checks[0].execution_status == "unavailable"
+    assert summary.checks[0].outcome is None
+
+
+def test_f6_optional_fail_required_pass_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.PASS,
+                required=True,
+            ),
+            _check(
+                check_kind=CheckKind.DBT_VALIDATION,
+                execution_status=CheckExecutionStatus.COMPLETED,
+                outcome=CheckOutcome.FAIL,
+                required=False,
+                evidence=[_evidence(code="optional_fail")],
+            ),
+        ],
+    )
+    assert validation.outcome == CheckOutcome.PASS.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.outcome == "pass"
+    assert summary.checks[1].required is False
+    assert summary.checks[1].outcome == "fail"
+
+
+def test_f6_all_required_error_unavailable_skipped_projects() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                check_kind=CheckKind.SQL_PARSE,
+                execution_status=CheckExecutionStatus.ERROR,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="engine_error")],
+            ),
+            _check(
+                check_kind=CheckKind.DUCKDB_EXECUTION,
+                execution_status=CheckExecutionStatus.UNAVAILABLE,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="duckdb_unavailable")],
+            ),
+            _check(
+                check_kind=CheckKind.DBT_VALIDATION,
+                execution_status=CheckExecutionStatus.SKIPPED,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="skipped_required")],
+            ),
+        ],
+    )
+    # Mix of error + non-error without completed → execution_failed (any ERROR).
+    assert validation.execution_status == OverallExecutionStatus.EXECUTION_FAILED.value
+    assert validation.outcome == CheckOutcome.INCONCLUSIVE.value
+    summary = _project_validation(intake, risk, validation)
+    assert summary.execution_status == "execution_failed"
+    assert summary.outcome == "inconclusive"
+    assert [c.outcome for c in summary.checks] == [None, None, None]
+    assert [c.execution_status for c in summary.checks] == [
+        "error",
+        "unavailable",
+        "skipped",
+    ]
+
+
+def test_f6_check_error_null_outcome_json_null() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.ERROR,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="engine_error")],
+            )
+        ],
+    )
+    pack = build_advisory_context_pack(
+        change_intake=intake,
+        risk_evaluation=risk,
+        validation_requested=True,
+        validation_artifact=validation,
+    )
+    dumped = pack.model_dump(mode="json")
+    assert dumped["validation"]["checks"][0]["outcome"] is None
+    # JSON serialization must keep null, not omit or invent an outcome.
+    text = json.dumps(dumped, ensure_ascii=False)
+    assert '"outcome": null' in text
+    assert dumped["validation"]["outcome"] == "inconclusive"
+    assert dumped["validation"]["outcome"] != "pass"
+    assert dumped["validation"]["outcome"] != "fail"
+
+def test_f6_empty_checks_fingerprint_stable() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[],
+    )
+    pack1 = build_advisory_context_pack(
+        change_intake=intake,
+        risk_evaluation=risk,
+        validation_requested=True,
+        validation_artifact=validation,
+    )
+    pack2 = build_advisory_context_pack(
+        change_intake=intake,
+        risk_evaluation=risk,
+        validation_requested=True,
+        validation_artifact=validation,
+    )
+    assert fingerprint_advisory_context(pack1) == fingerprint_advisory_context(pack2)
+    assert pack1.validation.checks == []
+
+
+def test_f6_no_synthetic_outcome_on_execution_failed() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[
+            _check(
+                execution_status=CheckExecutionStatus.ERROR,
+                outcome=None,
+                required=True,
+                evidence=[_evidence(code="engine_error")],
+            )
+        ],
+    )
+    summary = _project_validation(intake, risk, validation)
+    # Mirror F6 only — never promote execution_failed to FAIL.
+    assert summary.execution_status == "execution_failed"
+    assert summary.outcome == "inconclusive"
+    assert summary.checks[0].outcome is None
+
+
+def test_f6_source_validation_artifact_not_mutated_empty_checks() -> None:
+    intake = _make_intake()
+    risk = _make_risk(intake)
+    validation = build_validation_artifact(
+        subject_fingerprint=intake.content_fingerprint,
+        checks=[],
+    )
+    before = copy.deepcopy(validation.model_dump(mode="json"))
+    build_advisory_context_pack(
+        change_intake=intake,
+        risk_evaluation=risk,
+        validation_requested=True,
+        validation_artifact=validation,
+    )
+    assert validation.model_dump(mode="json") == before
+
+
 # ---- Regression --------------------------------------------------------------
 
 

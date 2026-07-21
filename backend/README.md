@@ -1615,6 +1615,22 @@ keeping only `check_kind`, `required`, `execution_status`, `outcome`, and
 `evidence_codes`. Check IDs, engine metadata, summaries, evidence messages,
 and evidence details are never copied.
 
+**F6 mirror (F7.4A):** `AdvisoryValidationSummary` is a redacted projection of
+the F6 `ValidationArtifact` — not an advisory-specific validation semantic.
+
+| F6 fact | Advisory projection |
+|---------|---------------------|
+| Overall `outcome` is always `pass` / `fail` / `inconclusive` | Required when `requested=true`; never invented |
+| Overall outcome is **never** null on a formed artifact | Null overall outcome is rejected for `requested=true` |
+| Empty `checks` → `not_run` + `inconclusive` | Empty `checks` is allowed; not treated as invalid |
+| Check `outcome` null on error / unavailable / skipped | Projected as JSON `null` |
+| `execution_failed` | Status preserved; outcome remains F6 aggregate (typically `inconclusive`) — **not** FAIL |
+| `not_run` | Status preserved; outcome remains F6 aggregate — **not** rewritten as a synthetic decision |
+
+Null overall outcome is not a reachable F6 artifact state. Null **check**
+outcomes mean the check did not complete; they are not PASS, FAIL, or
+INCONCLUSIVE. The model must not fill missing check outcomes.
+
 ### Trust and redaction
 
 Trust is always:

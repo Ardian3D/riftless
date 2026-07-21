@@ -452,7 +452,13 @@ class AdvisoryValidationCheckSummary(BaseModel):
 
 
 class AdvisoryValidationSummary(BaseModel):
-    """Redacted validation summary for an analysis/advisory context pack."""
+    """Redacted projection of an F6 ValidationArtifact for advisory context.
+
+    Mirrors F6 aggregation semantics. Does not invent PASS/FAIL/INCONCLUSIVE,
+    does not treat execution_failed as FAIL, and does not treat not_run as
+    INCONCLUSIVE beyond what F6 already aggregated. Empty ``checks`` is valid
+    when F6 produced an empty-check artifact (not_run + inconclusive).
+    """
 
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
 
@@ -481,7 +487,9 @@ class AdvisoryValidationSummary(BaseModel):
                 raise ValueError("checks must be empty when validation was not requested")
             return self
 
-        # requested=true
+        # requested=true — must carry a formed F6 ValidationArtifact projection.
+        # F6 overall outcome is always pass|fail|inconclusive (never null).
+        # F6 checks may be empty (aggregate → not_run + inconclusive).
         if not self.artifact_present:
             raise ValueError(
                 "artifact_present must be true when validation was requested "
@@ -492,11 +500,11 @@ class AdvisoryValidationSummary(BaseModel):
                 "execution_status is required when validation artifact is present"
             )
         if self.outcome is None:
-            raise ValueError("outcome is required when validation artifact is present")
-        if not self.checks:
             raise ValueError(
-                "checks must contain at least one item when validation artifact is present"
+                "outcome is required when validation artifact is present "
+                "(F6 ValidationArtifact always forms pass|fail|inconclusive)"
             )
+        # checks may be empty — mirrors F6 empty-check ValidationArtifact.
         return self
 
 

@@ -462,6 +462,72 @@ def test_validation_requested_true_artifact_present_invariant() -> None:
     assert len(pack.validation.checks) >= 1
 
 
+def test_validation_requested_true_empty_checks_mirrors_f6() -> None:
+    """F6 empty ValidationArtifact is not_run + inconclusive with checks=[].
+
+    AdvisoryValidationSummary must accept that projection without inventing
+    synthetic checks or outcomes.
+    """
+    summary = AdvisoryValidationSummary.model_validate(
+        {
+            "requested": True,
+            "artifact_present": True,
+            "execution_status": "not_run",
+            "outcome": "inconclusive",
+            "checks": [],
+        }
+    )
+    assert summary.requested is True
+    assert summary.artifact_present is True
+    assert summary.execution_status == "not_run"
+    assert summary.outcome == "inconclusive"
+    assert summary.checks == []
+
+    pack = AdvisoryContextPack.model_validate(
+        _valid_context(
+            validation={
+                "requested": True,
+                "artifact_present": True,
+                "execution_status": "not_run",
+                "outcome": "inconclusive",
+                "checks": [],
+            }
+        )
+    )
+    assert pack.validation.checks == []
+    assert pack.validation.outcome == "inconclusive"
+
+
+def test_validation_requested_true_null_outcome_rejected() -> None:
+    """F6 ValidationArtifact.outcome is always pass|fail|inconclusive (never null)."""
+    with pytest.raises(ValidationError):
+        AdvisoryValidationSummary.model_validate(
+            {
+                "requested": True,
+                "artifact_present": True,
+                "execution_status": "not_run",
+                "outcome": None,
+                "checks": [],
+            }
+        )
+
+
+def test_validation_check_null_outcome_for_noncompleted() -> None:
+    """Per-check outcome may be null when F6 check is error/unavailable/skipped."""
+    for status in ("error", "unavailable", "skipped"):
+        check = AdvisoryValidationCheckSummary.model_validate(
+            {
+                "check_kind": "sql_parse",
+                "required": True,
+                "execution_status": status,
+                "outcome": None,
+                "evidence_codes": ["engine_error"],
+            }
+        )
+        assert check.outcome is None
+        assert check.execution_status == status
+
+
 def test_validation_missing_artifact_when_requested_rejected() -> None:
     with pytest.raises(ValidationError):
         AdvisoryContextPack.model_validate(
