@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F6.5
+# RIFTLESS Backend — Phase F6.6
 
 Backend control-plane for RIFTLESS.
 
@@ -25,8 +25,8 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | SQLGlot SQL parse validator (`sql_parse`) | Implemented (F6.2) |
 | DuckDB in-memory rename validator (`duckdb_execution`) | Implemented (F6.3) |
 | dbt controlled project parse validator (`dbt_validation`) | Implemented (F6.4) |
-| Validation orchestration service | **Implemented (F6.5)** |
-| Validation HTTP endpoint | **Not implemented** |
+| Validation orchestration service | Implemented (F6.5) |
+| `POST /api/v1/validations/execute` (sync validation API) | **Implemented (F6.6)** |
 | Artifact registry / durable intake provenance | **Not implemented** |
 | Run history / GET run by ID | **Not implemented** |
 | DataHub / GitHub / real blast-radius discovery | **Not implemented** |
@@ -56,7 +56,8 @@ backend/
 │   │       ├── health.py
 │   │       ├── changes.py          # POST /api/v1/changes/intake
 │   │       ├── risk.py             # POST /api/v1/risk/evaluate
-│   │       └── runs.py             # POST /api/v1/runs/analyze
+│   │       ├── runs.py             # POST /api/v1/runs/analyze
+│   │       └── validations.py      # POST /api/v1/validations/execute
 │   ├── core/
 │   │   ├── config.py
 │   │   └── errors.py
@@ -69,7 +70,8 @@ backend/
 │   │   ├── sql_validation.py       # F6.2 SQL dialect + parse input
 │   │   ├── duckdb_validation.py    # F6.3 fixture + rename input
 │   │   ├── dbt_validation.py       # F6.4 dbt parse input
-│   │   └── validation_plan.py      # F6.5 validation plan input
+│   │   ├── validation_plan.py      # F6.5 validation plan input
+│   │   └── validation_api.py       # F6.6 response meta
 │   ├── services/
 │   │   ├── change_intake.py
 │   │   ├── risk_engine.py
@@ -96,7 +98,8 @@ backend/
 │   ├── test_sql_parse_validator.py
 │   ├── test_duckdb_rename_validator.py
 │   ├── test_dbt_parse_validator.py
-│   └── test_validation_orchestrator.py
+│   ├── test_validation_orchestrator.py
+│   └── test_validation_execute_api.py
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -1113,11 +1116,137 @@ turn required PASS into FAIL. Example:
 The orchestrator does not claim DataHub verification, GitHub origin, production
 fixture provenance, or universal validation completion.
 
+### Wiring status (F6.5)
+
+- Internal service only in F6.5  
+- Production HTTP boundary added in F6.6  
+
+---
+
+## Validation API endpoint (F6.6)
+
+F6.6 exposes the F6.5 orchestration service through one synchronous production
+endpoint:
+
+```http
+POST /api/v1/validations/execute
+```
+
+| In scope | Out of scope |
+|----------|--------------|
+| Thin sync route over `orchestrate_validation` | Analysis-run integration |
+| F4 success / error envelopes | Persistence / retrieval |
+| Honest trust meta | GET validation by ID / history |
+| HTTP 200 for any formed artifact | Queue / 202 / polling / websocket |
+| HTTP 422 for invalid plans | Deployment authorization |
+
+### Request
+
+Body is **`ValidationPlanInput`** (F6.5) directly:
+
+- `intake_reference` (caller-provided, unverified)  
+- `checks.sql_parse`  
+- `checks.duckdb_execution`  
+- `checks.dbt_validation`  
+
+Clients must **not** send `validation_id`, outcomes, check results, engine
+metadata, deployment flags, or persistence fields (`extra="forbid"`).
+
+### Execution
+
+Handler is a **synchronous** `def` (not `async def`) so FastAPI runs blocking
+SQLGlot / DuckDB / dbt work on a worker thread. Flow:
+
+1. FastAPI schema validation  
+2. `orchestrate_validation(plan)` (F6.5)  
+3. Return `ValidationArtifact` in the F4 success envelope  
+
+No HTTP loopback, no second aggregation, no short-circuit for valid plans.
+Check order remains SQLGlot → DuckDB → dbt.
+
+### HTTP status semantics
+
+| Situation | HTTP | Meaning |
+|-----------|------|---------|
+| Valid plan + artifact formed | **200** | API operation succeeded |
+| Artifact outcome PASS / FAIL / INCONCLUSIVE | **200** | Outcome is in `data.outcome` |
+| `execution_status` completed / partial / not_run / execution_failed | **200** | Status is in `data.execution_status` |
+| Invalid plan / schema / mismatch | **422** | Request could not be validated |
+| Unexpected programming error | **500** | Internal error (no details) |
+
+**HTTP 200 does not mean** validation PASS, deployment authorization, safe
+production change, writeback completion, or artifact persistence.
+
+### Success response
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "validation_id": "<uuid>",
+    "subject_fingerprint": "<sha256 of normalized_change only>",
+    "scope": "provided_artifacts_only",
+    "execution_status": "completed",
+    "outcome": "pass",
+    "checks": ["… three checks in fixed order …"],
+    "artifact_version": "1.0"
+  },
+  "meta": {
+    "operation": "validation_execution",
+    "phase": "F6.6",
+    "execution_mode": "synchronous_orchestration",
+    "validation_scope": "provided_artifacts_only",
+    "persistence": "none",
+    "retrieval_available": false,
+    "intake_reference_origin": "caller_provided",
+    "intake_reference_trust": "unverified",
+    "subject_fingerprint_scope": "normalized_change_only",
+    "fingerprint_check": "matched",
+    "cross_artifact_consistency": "matched",
+    "cross_artifact_provenance": "unverified",
+    "sql_origin": "caller_provided",
+    "sql_trust": "unverified",
+    "fixture_origin": "caller_provided",
+    "fixture_trust": "unverified",
+    "model_used": false,
+    "deployment_authorized": false
+  }
+}
+```
+
+`data` is the F6.1 **`ValidationArtifact`** (not a second contract).
+
+### Trust boundaries
+
+| Claim | Reality |
+|-------|---------|
+| Fingerprint check matched | `normalized_change` is consistent with `content_fingerprint` only |
+| Cross-artifact consistency matched | DuckDB change equals intake; SQL equals dbt model SQL |
+| Cross-artifact provenance | **unverified** — no GitHub/DataHub/registry proof |
+| SQL / fixture | caller-provided / unverified |
+| Persistence | **none**; retrieval not available |
+| Deployment | **not** authorized by this endpoint |
+
+Subject fingerprint scopes **only** the intake `normalized_change`. It does
+**not** bind the entire validation plan, SQL body, or fixture content.
+
+### Privacy
+
+Request may contain SQL and fixture values. Response **must not** echo:
+
+- raw SQL  
+- dbt model SQL  
+- fixture row values  
+- expected / calculated fingerprints on error  
+- exception messages / tracebacks  
+
+No request-body logging is added.
+
 ### Wiring status
 
-- **No** production validation route  
 - **Not** connected to `POST /api/v1/runs/analyze`  
-- Existing endpoints unchanged  
+- Existing F4/F5 endpoints unchanged  
+- No GET/list/retry/history validation routes  
 - No new runtime dependencies  
 
 ---

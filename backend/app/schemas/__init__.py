@@ -21,6 +21,7 @@ from app.schemas.validation import (
     ValidationCheckResult,
     ValidationEvidence,
 )
+from app.schemas.validation_api import ValidationExecutionMeta, validation_execution_meta
 from app.schemas.validation_plan import ValidationPlanChecks, ValidationPlanInput
 
 __all__ = [
@@ -49,6 +50,8 @@ __all__ = [
     "ValidationArtifact",
     "ValidationCheckResult",
     "ValidationEvidence",
+    "ValidationExecutionMeta",
     "ValidationPlanChecks",
     "ValidationPlanInput",
+    "validation_execution_meta",
 ]

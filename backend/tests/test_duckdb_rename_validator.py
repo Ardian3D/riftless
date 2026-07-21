@@ -689,6 +689,7 @@ def test_regression_openapi_paths_unchanged() -> None:
         "/api/v1/changes/intake",
         "/api/v1/risk/evaluate",
         "/api/v1/runs/analyze",
+        "/api/v1/validations/execute",
     }
-    assert not any("validat" in path for path in paths)
+    # F6.3 has no dedicated DuckDB route; only the F6.6 validations execute path.
     assert not any("duck" in path for path in paths)

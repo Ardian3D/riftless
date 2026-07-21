@@ -468,7 +468,7 @@ def test_evidence_details_primitives_only() -> None:
 
 
 def test_regression_existing_api_routes_still_registered() -> None:
-    """F6.1 must not remove production routes; no validation route yet."""
+    """F6.1 contracts must not remove production routes."""
     from fastapi.testclient import TestClient
 
     from app.main import app
@@ -486,5 +486,9 @@ def test_regression_existing_api_routes_still_registered() -> None:
     assert "/api/v1/changes/intake" in paths
     assert "/api/v1/risk/evaluate" in paths
     assert "/api/v1/runs/analyze" in paths
-    # No production validation route in F6.1
-    assert not any("validat" in path for path in paths)
+    # F6.6 adds the single validation execute route; no list/retrieve routes.
+    assert "/api/v1/validations/execute" in paths
+    assert not any(
+        path.startswith("/api/v1/validations/") and path != "/api/v1/validations/execute"
+        for path in paths
+    )
