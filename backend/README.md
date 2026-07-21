@@ -1,4 +1,4 @@
-# RIFTLESS Backend — Phase F7.1
+# RIFTLESS Backend — Phase F7.2
 
 Backend control-plane for RIFTLESS.
 
@@ -28,8 +28,8 @@ The frontend under repository-root `src/` is **not** connected to this API.
 | Validation orchestration service | Implemented (F6.5) |
 | `POST /api/v1/validations/execute` (sync validation API) | Implemented (F6.6) |
 | Analysis-run optional validation integration | Implemented (F6.7) |
-| Advisory contract foundation | **Implemented (F7.1)** |
-| Redacted context pack builder | **Not implemented** (F7.2) |
+| Advisory contract foundation | Implemented (F7.1) |
+| Redacted context pack builder | **Implemented (F7.2)** |
 | DeepSeek / model provider client | **Not implemented** |
 | Advisory HTTP endpoint | **Not implemented** |
 | Artifact registry / durable intake provenance | **Not implemented** |
@@ -87,7 +87,8 @@ backend/
 │   │   ├── duckdb_rename_validator.py  # F6.3 DuckDB in-memory rename
 │   │   ├── dbt_parse_validator.py  # F6.4 controlled dbt parse
 │   │   ├── validation_orchestrator.py  # F6.5 sequential orchestration
-│   │   └── advisory_artifacts.py   # F7.1 pure advisory builders
+│   │   ├── advisory_artifacts.py   # F7.1 pure advisory builders
+│   │   └── advisory_context_builder.py  # F7.2 redacted context pack
 │   └── utils/
 │       ├── fingerprint.py          # shared SHA-256 canonical fingerprint
 │       ├── advisory_fingerprint.py # F7.1 context-pack fingerprint
@@ -108,7 +109,8 @@ backend/
 │   ├── test_dbt_parse_validator.py
 │   ├── test_validation_orchestrator.py
 │   ├── test_validation_execute_api.py
-│   └── test_advisory_contracts.py  # F7.1
+│   ├── test_advisory_contracts.py  # F7.1
+│   └── test_advisory_context_builder.py  # F7.2
 ├── .env.example
 ├── .gitignore
 ├── pyproject.toml
@@ -1504,12 +1506,150 @@ no free-form `details` dictionary in F7.1.
 
 | Phase | Intent |
 |-------|--------|
-| **F7.1** (this) | Contracts + pure builders |
-| **F7.2** | Build redacted `AdvisoryContextPack` from run artifacts |
+| **F7.1** | Contracts + pure artifact builders |
+| **F7.2** (this section continues below) | Server-controlled redacted context pack builder |
 | Later | Provider client (DeepSeek), optional endpoint / run integration |
 
 OpenAPI production routes remain the F6 six paths. There is **no** advisory
-HTTP route in F7.1.
+HTTP route in F7.1 or F7.2.
+
+---
+
+## Server-controlled redacted context pack builder (F7.2)
+
+F7.2 implements a **pure** builder:
+
+`build_advisory_context_pack(change_intake, risk_evaluation, validation_requested, validation_artifact)`
+
+Sources are current-request RIFTLESS artifacts only:
+
+1. F5.1 `ChangeIntakeData`  
+2. F5.2 `RiskEvaluationData`  
+3. Optional F6.1 `ValidationArtifact`  
+
+Caller cannot supply aliases, trust labels, redaction categories, subject
+fingerprint, or pre-built summaries. Those values are formed server-side.
+
+### What F7.2 does
+
+| Present | Not present |
+|---------|-------------|
+| Explicit allowlisted field projection | DeepSeek / model API call |
+| Fixed aliases `asset_1` / `column_1` / `column_2` | API key / provider config |
+| Source fingerprint consistency checks | HTTP advisory endpoint |
+| Risk reason **codes** only | Prompt templates / parsers |
+| Validation evidence **codes** only | Semantic secret/SQL scanner |
+| Server trust + redaction summaries | Run integration (`/runs/analyze`) |
+| Safe build errors (code + message) | Persistence / retrieval |
+
+### Source consistency
+
+Before projection the builder:
+
+1. Recomputes the F5 content fingerprint from intake `normalized_change`  
+2. Requires an exact match with intake `content_fingerprint`  
+3. Requires risk `evaluated_content_fingerprint` to match  
+4. Enforces validation presence rules (`requested` ↔ artifact)  
+5. When validation is present, requires matching `subject_fingerprint`  
+6. Supports only `rename_column`  
+
+Failures raise `AdvisoryContextBuildError` with a safe code such as
+`intake_fingerprint_mismatch`, `risk_subject_mismatch`,
+`validation_presence_mismatch`, `validation_subject_mismatch`, or
+`unsupported_change_type`. Errors never include calculated/expected
+fingerprints, raw identifiers, SQL, or artifact dumps.
+
+### Change projection
+
+| Source | Pack field |
+|--------|------------|
+| `change_type` | preserved (`rename_column`) |
+| `asset.platform` | `asset_platform` |
+| database / schema / name | **not copied** → `asset_alias = asset_1` |
+| source / target columns | **not copied** → `column_1` / `column_2` |
+| reason text | **not copied** → `reason_present` boolean only |
+
+No alias mapping is stored or returned. Identifiers are not hashed.
+
+### Risk projection
+
+Copies only:
+
+- `decision`  
+- `reason_codes` (from `RiskReason.code`, first-occurrence de-duplicated)  
+- `context_complete`  
+- `downstream_dependency_count`  
+- `protected_asset`  
+
+Does **not** copy reason messages, evidence objects, or the full evaluation
+context snapshot.
+
+### Validation projection
+
+When `validation_requested=false`:
+
+```json
+{
+  "requested": false,
+  "artifact_present": false,
+  "execution_status": null,
+  "outcome": null,
+  "checks": []
+}
+```
+
+When requested, maps overall status/outcome and each check in artifact order,
+keeping only `check_kind`, `required`, `execution_status`, `outcome`, and
+`evidence_codes`. Check IDs, engine metadata, summaries, evidence messages,
+and evidence details are never copied.
+
+### Trust and redaction
+
+Trust is always:
+
+- `subject_origin = riftless_runtime`  
+- `subject_scope = current_request_only`  
+- `subject_persisted = false`  
+- `input_origin = caller_provided`  
+- `input_trust = unverified`  
+- `provenance_verified = false`  
+
+Redaction summary is always server-owned: `applied=true`, version `1.0`, full
+canonical exclusion list in canonical order.
+
+**Meaning of `applied=true`:** the builder performed allowlisted field
+projection that excludes the declared categories from the generated pack.
+It does **not** prove semantic secret detection, SQL detection, repository
+scanning, or authenticity of upstream artifacts.
+
+### Natural-language boundary
+
+Generated packs carry enums, booleans, bounded counts, fixed aliases, reason
+codes, evidence codes, fixed trust/redaction constants, versions, and the
+verified subject fingerprint. They do **not** carry caller reason text, risk
+messages, validation summaries, evidence messages, SQL, or repository
+snippets. F7.2 therefore does not add a semantic secret scanner.
+
+### Fingerprint boundary
+
+`subject_fingerprint` is the verified F5 intake content fingerprint
+(consistency only). The separate F7.1 `fingerprint_advisory_context` over the
+pack remains available for binding advisory artifacts later. Neither proves
+authenticity, provenance, ownership, or successful semantic redaction.
+
+### Purity
+
+The builder is deterministic for the same semantic sources, does not mutate
+inputs, and does not read environment variables, open network sockets, run
+subprocesses, write files, or log source content. Fixed aliases only — no
+random identifiers.
+
+### Authority
+
+Advisory context packs still do **not** authorize risk decisions, validation
+outcomes, policy results, or deployment. No model call is made in F7.2.
+
+OpenAPI production routes remain the six F6 paths. No advisory endpoint.
 
 ---
 
