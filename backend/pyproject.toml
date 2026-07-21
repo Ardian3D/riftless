@@ -14,10 +14,17 @@ keywords = ["riftless", "fastapi", "control-plane"]
 
 # Runtime dependencies for the foundation only.
 # No database, AI provider, DataHub, GitHub, auth, or observability packages.
+# SQLGlot is parse-only (F6.2). DuckDB is in-memory rename simulation only (F6.3).
+# dbt-core + dbt-duckdb are controlled temporary-project parse only (F6.4).
+# No dbt-snowflake/postgres/bigquery adapters. No SQLAlchemy / external DB drivers.
 dependencies = [
   "fastapi>=0.115.0,<1.0.0",
   "uvicorn[standard]>=0.32.0,<1.0.0",
   "pydantic-settings>=2.6.0,<3.0.0",
+  "sqlglot==30.12.0",
+  "duckdb==1.5.4",
+  "dbt-core==1.10.15",
+  "dbt-duckdb==1.10.1",
 ]
 
 [project.optional-dependencies]
