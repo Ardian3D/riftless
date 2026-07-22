@@ -1,8 +1,21 @@
 """Shared Pydantic schemas for the RIFTLESS API."""
 
+from app.schemas.advisory import (
+    AdvisoryArtifact,
+    AdvisoryContent,
+    AdvisoryContextPack,
+    AdvisoryExecutionStatus,
+    AdvisoryStatusDetail,
+)
 from app.schemas.changes import ChangeIntakeData, ChangeIntakeRequest
 from app.schemas.common import ErrorBody, ErrorResponse, SuccessResponse
 from app.schemas.dbt_validation import DbtParseInput, MAX_MODEL_SQL_LENGTH
+from app.schemas.deepseek_advisory import (
+    DEEPSEEK_ADVISORY_MODEL,
+    DeepSeekAdvisoryMessage,
+    DeepSeekAdvisoryRequest,
+    DeepSeekAdvisoryResponse,
+)
 from app.schemas.duckdb_validation import (
     DuckDbFixture,
     DuckDbFixtureColumn,
@@ -15,7 +28,12 @@ from app.schemas.run_validation import (
     RunValidationChecks,
     RunValidationInput,
 )
-from app.schemas.runs import AnalysisRunData, AnalysisRunRequest
+from app.schemas.runs import (
+    RUN_ARTIFACT_VERSION,
+    AdvisoryRunOptions,
+    AnalysisRunData,
+    AnalysisRunRequest,
+)
 from app.schemas.sql_validation import MAX_SQL_LENGTH, SqlDialect, SqlParseInput
 from app.schemas.validation import (
     CheckExecutionStatus,
@@ -30,13 +48,24 @@ from app.schemas.validation_api import ValidationExecutionMeta, validation_execu
 from app.schemas.validation_plan import ValidationPlanChecks, ValidationPlanInput
 
 __all__ = [
+    "AdvisoryArtifact",
+    "AdvisoryContent",
+    "AdvisoryContextPack",
+    "AdvisoryExecutionStatus",
+    "AdvisoryStatusDetail",
+    "AdvisoryRunOptions",
     "AnalysisRunData",
     "AnalysisRunRequest",
+    "RUN_ARTIFACT_VERSION",
     "ChangeIntakeData",
     "ChangeIntakeRequest",
     "CheckExecutionStatus",
     "CheckKind",
     "CheckOutcome",
+    "DEEPSEEK_ADVISORY_MODEL",
+    "DeepSeekAdvisoryMessage",
+    "DeepSeekAdvisoryRequest",
+    "DeepSeekAdvisoryResponse",
     "DbtParseInput",
     "DuckDbFixture",
     "DuckDbFixtureColumn",

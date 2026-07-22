@@ -1,4 +1,4 @@
-"""Tests for POST /api/v1/runs/analyze (phase F5.3 / F6.7)."""
+"""Tests for POST /api/v1/runs/analyze (phase F5.3 / F6.7 / F7.5)."""
 
 from __future__ import annotations
 
@@ -270,10 +270,14 @@ def test_success_envelope_shape() -> None:
         "change_intake",
         "risk_evaluation",
         "validation_artifact",
+        "advisory_requested",
+        "advisory_artifact",
         "run_artifact_version",
     }
-    assert data["run_artifact_version"] == "1.1"
+    assert data["run_artifact_version"] == "1.2"
     assert data["validation_artifact"] is None
+    assert data["advisory_requested"] is False
+    assert data["advisory_artifact"] is None
 
 
 def test_run_intake_evaluation_ids_are_uuids() -> None:
@@ -393,7 +397,7 @@ def test_malformed_json_rejected() -> None:
 def test_meta_honest_orchestration_contract_without_validation() -> None:
     meta = _client().post(ANALYZE_PATH, json=_body(_allow_ctx())).json()["meta"]
     assert meta["operation"] == "synchronous_analysis_run"
-    assert meta["phase"] == "F6.7"
+    assert meta["phase"] == "F7.5"
     assert meta["execution_mode"] == "in_process"
     assert meta["persistence"] == "none"
     assert meta["retrieval_available"] is False
@@ -416,6 +420,15 @@ def test_meta_honest_orchestration_contract_without_validation() -> None:
     assert meta["validation_input_trust"] is None
     assert meta["validation_sql_origin"] is None
     assert meta["validation_fixture_origin"] is None
+    assert meta["advisory_requested"] is False
+    assert meta["advisory_executed"] is False
+    assert meta["advisory_artifact_present"] is False
+    assert meta["advisory_persistence"] == "none"
+    assert meta["advisory_retrieval_available"] is False
+    assert meta["advisory_authority"] is None
+    assert meta["advisory_input_origin"] is None
+    assert meta["advisory_source_scope"] is None
+    assert meta["advisory_provider_output_trust"] is None
 
 
 def test_completed_independent_of_decision() -> None:
@@ -455,7 +468,9 @@ def test_orchestrator_service_in_process_no_http() -> None:
     assert result.risk_evaluation.decision == "ALLOW"
     assert result.risk_evaluation.intake_id == result.change_intake.intake_id
     assert result.validation_artifact is None
-    assert result.run_artifact_version == "1.1"
+    assert result.advisory_requested is False
+    assert result.advisory_artifact is None
+    assert result.run_artifact_version == "1.2"
 
 
 def test_standalone_risk_meta_still_caller_provided() -> None:
@@ -922,7 +937,9 @@ def test_meta_when_validation_requested() -> None:
     assert meta["validation_persistence"] == "none"
     assert meta["validation_retrieval_available"] is False
     assert meta["deployment_authorized"] is False
-    assert meta["phase"] == "F6.7"
+    assert meta["phase"] == "F7.5"
+    assert meta["advisory_requested"] is False
+    assert meta["advisory_artifact_present"] is False
 
 
 def test_route_handler_is_synchronous() -> None:
@@ -1010,9 +1027,11 @@ def test_real_analyze_with_validation_all_engines() -> None:
     payload = response.json()
     data = payload["data"]
     assert data["orchestration_status"] == "completed"
-    assert data["run_artifact_version"] == "1.1"
+    assert data["run_artifact_version"] == "1.2"
     assert data["risk_evaluation"]["decision"] == "ALLOW"
     assert data["validation_artifact"] is not None
+    assert data["advisory_requested"] is False
+    assert data["advisory_artifact"] is None
     va = data["validation_artifact"]
     assert va["scope"] == "provided_artifacts_only"
     assert va["subject_fingerprint"] == data["change_intake"]["content_fingerprint"]
