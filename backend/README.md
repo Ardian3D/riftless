@@ -2183,6 +2183,31 @@ freshness or verified provenance. Artifacts have no persistence or retrieval,
 no writeback, no risk/run integration, and no DeepSeek forwarding. F8.2 will
 handle server-side DataHub configuration and the bounded transport boundary.
 
+## F8.2 DataHub MCP configuration, transport, and lifecycle boundary
+
+F8.2 adds a server-only, explicit DataHub MCP Streamable HTTP boundary. The
+only configuration variables are `DATAHUB_MCP_URL` and `DATAHUB_TOKEN`;
+remote endpoints require HTTPS and bearer authentication, while loopback
+HTTP is allowed for local development. Tokens in URLs are rejected. Missing
+configuration is an optional provider state and does not affect startup,
+`/health`, or `/ready`.
+
+The MCP protocol target is explicitly locked to `2025-11-25`. Initialization
+uses the fixed RIFTLESS client identity and empty client capabilities, then
+requires `initialize` followed by `notifications/initialized` and a tools
+capability. The boundary supports `application/json` and bounded
+`text/event-stream` responses. Request bodies are limited to 65,536 bytes and
+responses to 1 MiB. TLS verification is enabled, environment proxies and
+redirects are disabled, and there is no automatic retry.
+
+The token is header-only and is never included in JSON-RPC bodies, artifacts,
+errors, logs, persistence, or session objects. Session IDs are optional,
+bounded, and non-persistent. F8.2 has no live network tests, asset search,
+MCP tool invocation, mutation/writeback, run/risk integration, or GraphQL/
+OpenAPI DataHub client. F8.3 will add constrained read-tool calls and asset
+resolution. This boundary does not claim live interoperability with every
+DataHub deployment or that provider metadata is authentic or available.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |
