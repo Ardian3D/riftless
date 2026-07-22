@@ -2208,6 +2208,25 @@ OpenAPI DataHub client. F8.3 will add constrained read-tool calls and asset
 resolution. This boundary does not claim live interoperability with every
 DataHub deployment or that provider metadata is authentic or available.
 
+## F8.3A DataHub read-tool discovery and allowlist
+
+F8.3A adds bounded `tools/list` discovery against the fixed positive
+allowlist: `search`, `get_entities`, `list_schema_fields`, and `get_lineage`.
+Provider tool definitions are untrusted metadata. Unknown and mutation tools
+are ignored, while required read tools fail closed when unsafe, task-required,
+or missing. Annotations are hints only; missing read-only hints remain
+unverified and never grant authority.
+
+Pagination is bounded to 10 pages, 256 provider tools total, 128 tools per
+page, and 512-character opaque cursors. Input schemas are structurally
+validated and receive internal deterministic SHA-256 fingerprints. Raw tool
+definitions, ignored names, schemas, and cursors are not persisted, logged,
+exposed through API, or forwarded to DeepSeek.
+
+F8.3A performs no `tools/call`, metadata retrieval, asset resolution, context
+normalization, snapshot fallback, or live DataHub verification. It keeps MCP
+protocol `2025-11-25` and does not mix draft protocol rules. F8.3B will add
+constrained search arguments and asset candidates.
 ## Health vs readiness
 
 | Endpoint | Meaning |
