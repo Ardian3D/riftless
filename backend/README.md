@@ -2227,6 +2227,29 @@ F8.3A performs no `tools/call`, metadata retrieval, asset resolution, context
 normalization, snapshot fallback, or live DataHub verification. It keeps MCP
 protocol `2025-11-25` and does not mix draft protocol rules. F8.3B will add
 constrained search arguments and asset candidates.
+
+## F8.3B1 DataHub search schema attestation and call plan
+
+F8.3B1 attests the discovered `search` input schema using a bounded,
+normalized contract. Raw provider schemas remain ephemeral during discovery;
+the F8.3A catalog remains backward-compatible, while a new discovery bundle
+carries the normalized search compatibility flags and the next JSON-RPC
+request ID.
+
+The required query uses the server-generated bounded `/q ` keyword form. A
+dataset filter, result limit of 10, offset of 0, and keyword strategy are
+planned only when the discovered schema safely supports each fixed value.
+Callers cannot provide arbitrary search arguments, and sorting is always
+omitted. The schema fingerprint is an internal deterministic content
+consistency check; it is not proof of authenticity, safety, freshness,
+provenance, authorization, or successful future execution.
+
+F8.3B1 can build and canonically serialize one strict `tools/call` request,
+but it does not send it, parse a result, retrieve metadata, or resolve an
+asset. There are no live network tests, app/run/risk integration, persistence,
+DeepSeek forwarding, or writeback. F8.3B2 will execute one bounded search call
+using fake transport and parse a strict provider result envelope.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |

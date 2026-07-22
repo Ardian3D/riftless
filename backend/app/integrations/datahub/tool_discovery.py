@@ -148,34 +148,67 @@ def _validate_schema(schema: Any) -> dict[str, Any]:
 
 
 def _parse_tool_definition(raw: Any) -> DataHubReadToolCapability | None:
-    if not isinstance(raw, dict) or not isinstance(raw.get("name"), str): raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+    return _parse_tool_definition_details(raw)[0]
+
+
+def _parse_tool_definition_details(raw: Any) -> tuple[DataHubReadToolCapability | None, dict[str, Any] | None]:
+    """Validate a provider definition and retain only ephemeral schema details."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+        raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
     name = raw["name"]
-    if not _TOOL_NAME.fullmatch(name): raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
-    if "inputSchema" not in raw: raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+    if not _TOOL_NAME.fullmatch(name):
+        raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+    if "inputSchema" not in raw:
+        raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
     schema = _validate_schema(raw["inputSchema"])
     annotations = raw.get("annotations", {})
-    if annotations is None: annotations = {}
-    if not isinstance(annotations, dict): raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+    if annotations is None:
+        annotations = {}
+    if not isinstance(annotations, dict):
+        raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
     hints: dict[str, bool | None] = {}
     for key in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
-        if key in annotations and not isinstance(annotations[key], bool): raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+        if key in annotations and not isinstance(annotations[key], bool):
+            raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
         hints[key] = annotations.get(key)
     execution = raw.get("execution", {})
-    if execution is None: execution = {}
-    if not isinstance(execution, dict): raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+    if execution is None:
+        execution = {}
+    if not isinstance(execution, dict):
+        raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
     task_support = execution.get("taskSupport", "unspecified")
-    if task_support not in {"forbidden", "optional", "required", "unspecified"}: raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
-    try: enum_name = DataHubReadToolName(name)
-    except ValueError: return None
-    if hints["readOnlyHint"] is False or hints["destructiveHint"] is True: raise DataHubToolDiscoveryError("required_tool_unsafe", "Required DataHub MCP read capability is unsafe.")
-    if task_support == "required": raise DataHubToolDiscoveryError("required_tool_requires_tasks", "Required DataHub MCP capability requires unsupported tasks.")
-    return DataHubReadToolCapability(name=enum_name, input_schema_fingerprint=_schema_fingerprint(schema), annotation_verified=hints["readOnlyHint"] is True and hints["destructiveHint"] is not True, read_only_hint=hints["readOnlyHint"], idempotent_hint=hints["idempotentHint"], open_world_hint=hints["openWorldHint"], task_support=task_support)
+    if task_support not in {"forbidden", "optional", "required", "unspecified"}:
+        raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+    try:
+        enum_name = DataHubReadToolName(name)
+    except ValueError:
+        return None, None
+    if hints["readOnlyHint"] is False or hints["destructiveHint"] is True:
+        raise DataHubToolDiscoveryError("required_tool_unsafe", "Required DataHub MCP read capability is unsafe.")
+    if task_support == "required":
+        raise DataHubToolDiscoveryError("required_tool_requires_tasks", "Required DataHub MCP capability requires unsupported tasks.")
+    fingerprint = _schema_fingerprint(schema)
+    capability = DataHubReadToolCapability(
+        name=enum_name,
+        input_schema_fingerprint=fingerprint,
+        annotation_verified=hints["readOnlyHint"] is True and hints["destructiveHint"] is not True,
+        read_only_hint=hints["readOnlyHint"],
+        idempotent_hint=hints["idempotentHint"],
+        open_world_hint=hints["openWorldHint"],
+        task_support=task_support,
+    )
+    return capability, schema
 
 
-def discover_datahub_read_tools(*, config: DataHubMCPConfig, session: DataHubMCPSession, transport: DataHubMCPTransport) -> DataHubReadToolCatalog:
+def fingerprint_datahub_tool_input_schema(schema: dict[str, Any]) -> str:
+    """Return the same bounded fingerprint used by normalized capabilities."""
+    return _schema_fingerprint(_validate_schema(schema))
+
+
+def _discover_tool_details(*, config: DataHubMCPConfig, session: DataHubMCPSession, transport: DataHubMCPTransport) -> tuple[DataHubReadToolCatalog, dict[str, dict[str, Any]], int]:
     if not isinstance(config, DataHubMCPConfig) or not isinstance(session, DataHubMCPSession) or session.endpoint_url != config.endpoint_url or session.protocol_version != DATAHUB_MCP_PROTOCOL_VERSION or not session.tools_supported:
         raise DataHubToolDiscoveryError("session_config_mismatch", "DataHub MCP session and configuration are incompatible.")
-    seen_cursors: set[str] = set(); seen_tools: set[str] = set(); capabilities: dict[DataHubReadToolName, DataHubReadToolCapability] = {}
+    seen_cursors: set[str] = set(); seen_tools: set[str] = set(); capabilities: dict[DataHubReadToolName, DataHubReadToolCapability] = {}; schemas: dict[str, dict[str, Any]] = {}
     cursor: str | None = None; pages = 0; total_tools = 0
     while True:
         if pages >= MAX_DISCOVERY_PAGES: raise DataHubToolDiscoveryError("pagination_limit_exceeded", "DataHub MCP tool discovery failed.")
@@ -191,12 +224,14 @@ def discover_datahub_read_tools(*, config: DataHubMCPConfig, session: DataHubMCP
         total_tools += len(tools)
         if total_tools > MAX_PROVIDER_TOOLS: raise DataHubToolDiscoveryError("tool_catalog_too_large", "DataHub MCP tool discovery failed.")
         for raw in tools:
-            capability = _parse_tool_definition(raw)
-            if not isinstance(raw, dict) or not isinstance(raw.get("name"), str): raise DataHubToolDiscoveryError("invalid_tool_definition", "DataHub MCP tool definition is invalid.")
+            capability, schema = _parse_tool_definition_details(raw)
             raw_name = raw["name"]
             if raw_name in seen_tools: raise DataHubToolDiscoveryError("duplicate_tool_name", "DataHub MCP tool discovery failed.")
             seen_tools.add(raw_name)
-            if capability is not None: capabilities[capability.name] = capability
+            if capability is not None:
+                capabilities[capability.name] = capability
+                if capability.name is DataHubReadToolName.SEARCH and schema is not None:
+                    schemas[capability.name.value] = schema
         if "nextCursor" not in result: break
         next_cursor = result["nextCursor"]
         _validate_cursor(next_cursor)
@@ -204,4 +239,9 @@ def discover_datahub_read_tools(*, config: DataHubMCPConfig, session: DataHubMCP
         seen_cursors.add(next_cursor); cursor = next_cursor; pages += 1
     if set(capabilities) != set(READ_TOOL_ORDER): raise DataHubToolDiscoveryError("required_tool_missing", "Required DataHub MCP read capability is missing.")
     ordered = tuple(capabilities[name] for name in READ_TOOL_ORDER)
-    return DataHubReadToolCatalog(tools=ordered, all_required_tools_available=True, annotation_verification_complete=all(tool.annotation_verified for tool in ordered), catalog_version=CATALOG_VERSION)
+    catalog = DataHubReadToolCatalog(tools=ordered, all_required_tools_available=True, annotation_verification_complete=all(tool.annotation_verified for tool in ordered), catalog_version=CATALOG_VERSION)
+    return catalog, schemas, pages + 3
+
+
+def discover_datahub_read_tools(*, config: DataHubMCPConfig, session: DataHubMCPSession, transport: DataHubMCPTransport) -> DataHubReadToolCatalog:
+    return _discover_tool_details(config=config, session=session, transport=transport)[0]
