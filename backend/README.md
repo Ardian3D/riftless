@@ -2156,6 +2156,33 @@ OpenAPI production routes remain exactly the six F6 paths.
 
 ---
 
+## F8.1 DataHub context contract foundation
+
+F8.1 defines the normalized, bounded DataHub context contracts and pure
+artifact builders. It does not make a DataHub, MCP, or GraphQL network call,
+read `DATAHUB_TOKEN` or DataHub URL configuration, or add a provider SDK.
+Raw provider responses are not domain contracts. DataHub URNs are structural
+references only; they do not prove entity existence, provenance, freshness,
+authenticity, ownership, authorization, or a correct change target.
+
+Resolved subjects and confidence are selection metadata, not policy authority.
+Schema and field metadata carry no sample row values. Downstream lineage is
+bounded to depth 5, 200 nodes, and 400 edges. Column lineage carries no
+transformation SQL. Query usage is a bounded count only, never query text.
+Owners, tags, glossary terms, domains, and descriptions remain untrusted
+external metadata and do not make policy decisions.
+
+The required context categories are schema, field metadata, and downstream
+lineage. Optional metadata does not automatically make required context
+incomplete. `completed` means all required categories are available and not
+truncated; `partial` means a formed pack is missing or truncating required
+context. Fingerprints prove deterministic content consistency only.
+
+The source kind contract is limited to `live` and `snapshot`; neither implies
+freshness or verified provenance. Artifacts have no persistence or retrieval,
+no writeback, no risk/run integration, and no DeepSeek forwarding. F8.2 will
+handle server-side DataHub configuration and the bounded transport boundary.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |
