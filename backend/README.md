@@ -2250,6 +2250,32 @@ asset. There are no live network tests, app/run/risk integration, persistence,
 DeepSeek forwarding, or writeback. F8.3B2 will execute one bounded search call
 using fake transport and parse a strict provider result envelope.
 
+## F8.3B2 DataHub search execution and result normalization
+
+F8.3B2 executes exactly one bounded DataHub `search` `tools/call` per service
+invocation, reusing the F8.2 transport and the F8.3B1 request plan. Tests use
+fake transport only; there is no live DataHub request, retry, pagination,
+rediscovery, or additional tool call.
+
+MCP `CallToolResult` content is structurally bounded. `structuredContent` is
+preferred, while a strict single-text JSON fallback is supported. Only text
+content blocks are accepted; `isError=true` fails safely without exposing
+provider text. Raw content and provider payloads are discarded after parsing.
+
+The current compatibility-bounded adapter expects `start`, `count`, `total`,
+and `searchResults`. It accepts at most ten results and normalizes only
+dataset URNs. Non-dataset results are ignored and counted. Provider order is
+preserved as an observation, not treated as resolution or policy authority.
+The request fingerprint binds the normalized result to the exact serialized
+request bytes; it is not proof of authenticity, freshness, provenance,
+metadata correctness, or successful provider execution.
+
+F8.3B2 does not score candidates, select a winning asset, call
+`get_entities`, retrieve schema or lineage, build context artifacts, or
+integrate with runs/risk/DeepSeek. F8.3B3 will construct queries
+deterministically from change identifiers and resolve bounded asset
+candidates.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |

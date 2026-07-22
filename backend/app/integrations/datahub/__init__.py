@@ -16,6 +16,7 @@ from .search_contract import (
     discover_datahub_read_tool_bundle,
     serialize_datahub_search_tools_call_request,
 )
+from .search_execution import DataHubDatasetSearchRecord, DataHubSearchExecutionError, DataHubSearchExecutionResult, execute_datahub_search
 
 __all__ = [
     "DataHubMCPConfig",
@@ -34,4 +35,8 @@ __all__ = [
     "build_datahub_search_tools_call_request",
     "discover_datahub_read_tool_bundle",
     "serialize_datahub_search_tools_call_request",
+    "DataHubDatasetSearchRecord",
+    "DataHubSearchExecutionError",
+    "DataHubSearchExecutionResult",
+    "execute_datahub_search",
 ]
