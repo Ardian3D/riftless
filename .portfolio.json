@@ -1,0 +1,18 @@
+{
+  "category": "DATA / DEVTOOLS / CHANGE INTELLIGENCE",
+  "status": "FRONTEND COMPLETE",
+  "featured": false,
+  "role": "Developer",
+  "order": 4,
+  "previewType": "DATA_CHANGE_GUARDIAN",
+  "summary": "Context-aware data change guardian for analyzing downstream blast radius, validating compatibility, and helping engineering teams review risky schema and pipeline changes before merge.",
+  "stack": [
+    "React",
+    "Vite",
+    "TypeScript",
+    "Tailwind CSS"
+  ],
+  "liveUrl": null,
+  "caseStudyUrl": null,
+  "hidden": false
+}
