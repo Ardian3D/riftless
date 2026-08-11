@@ -230,7 +230,7 @@ def _discover_tool_details(*, config: DataHubMCPConfig, session: DataHubMCPSessi
             seen_tools.add(raw_name)
             if capability is not None:
                 capabilities[capability.name] = capability
-                if capability.name is DataHubReadToolName.SEARCH and schema is not None:
+                if schema is not None and capability.name in (DataHubReadToolName.SEARCH, DataHubReadToolName.GET_ENTITIES, DataHubReadToolName.LIST_SCHEMA_FIELDS):
                     schemas[capability.name.value] = schema
         if "nextCursor" not in result: break
         next_cursor = result["nextCursor"]

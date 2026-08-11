@@ -2333,6 +2333,46 @@ is fresh or authentic, that DataHub search is complete, that an ambiguous
 candidate was resolved, that schema/lineage was retrieved, or that risk safety
 was established.
 
+## F8.3C1 DataHub entity/schema schema attestation and call planning
+
+F8.3C1 attests the runtime `get_entities` and `list_schema_fields` input
+schemas before either tool may be executed by RIFTLESS. The runtime
+`tools/list` schema is the authority: the advertised raw input schema must
+prove it can safely accept the bounded RIFTLESS request shape, otherwise the
+contract fails closed. Upstream documentation is only a compatibility hint,
+never authority.
+
+Key guarantees:
+
+- Raw provider schemas remain ephemeral in memory during the single discovery
+  sequence and are discarded; they never enter capabilities, contracts,
+  bundles, plans, requests, errors, or artifacts.
+- `get_entities` is constrained to one real JSON array containing the single
+  deterministically resolved dataset URN (`{"urns": ["<urn>"]}`). RIFTLESS
+  does not use provider stringified-JSON or string/list repair behavior.
+- `list_schema_fields` is constrained to the resolved URN, one
+  affected-column keyword, `limit: 50`, and `offset: 0`. Provider keyword
+  ordering is not resolution, risk, or confidence authority.
+- Plans are bound to the F8.3B2 executed search result and the F8.3B3
+  resolved candidate. Ambiguous or unresolved resolutions fail before any
+  planning.
+- Request IDs continue after the executed search: `get_entities` uses
+  `search_execution.next_request_id`, `list_schema_fields` uses `+1`, and the
+  next available ID after both is `+2`.
+- Request objects can be constructed and serialized canonically (UTF-8,
+  sorted keys, stable separators, bounded to the existing 65536-byte limit).
+
+F8.3C1 sends **no** `get_entities` call, **no** `list_schema_fields` call, and
+no `get_lineage` call. No metadata or schema response parser exists yet. There
+is no app, risk, validation, DeepSeek, or persistence integration. OpenAPI
+production routes remain exactly the six F6 paths.
+
+F8.3C1 does **not** claim live compatibility was verified, that metadata or
+schema was retrieved, that the affected field exists, that provider output is
+authentic or fresh, that the schema is complete, or that lineage was
+retrieved. F8.3C2 will execute bounded `get_entities`; F8.3C3 will execute
+bounded `list_schema_fields`.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |
