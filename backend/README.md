@@ -2370,8 +2370,46 @@ production routes remain exactly the six F6 paths.
 F8.3C1 does **not** claim live compatibility was verified, that metadata or
 schema was retrieved, that the affected field exists, that provider output is
 authentic or fresh, that the schema is complete, or that lineage was
-retrieved. F8.3C2 will execute bounded `get_entities`; F8.3C3 will execute
+retrieved. F8.3C2 executes bounded `get_entities` (below); F8.3C3 will execute
 bounded `list_schema_fields`.
+
+## F8.3C2 Bounded get_entities execution and dataset metadata normalization
+
+F8.3C2 executes exactly one bounded `get_entities` `tools/call` per valid
+invocation, reusing the F8.3C1 request plan and the F8.2 transport. Tests use
+fake transport only; there is no live DataHub request.
+
+Key guarantees:
+
+- The request is inherited from F8.3C1 and contains exactly one resolved
+  dataset URN array (`{"urns": ["<urn>"]}`); no retry, second attempt,
+  alternate URN, or fallback provider.
+- The MCP `CallToolResult` envelope is structurally validated (content
+  required, at most 8 text blocks, strict text bounds, `isError` boolean).
+- `structuredContent.result` with exactly one item is supported and takes
+  priority over text; a strict top-level JSON-array text fallback is
+  supported.
+- Provider per-item error objects fail safely with a fixed RIFTLESS error;
+  provider error text is never surfaced.
+- The returned entity URN must exactly equal the requested resolved dataset
+  URN, and the returned platform is rechecked using F8.3B3 semantics.
+- Bounded dataset metadata is normalized: dataset name, system/editable
+  descriptions, owners, tags, glossary terms, and domain, reusing F8.1
+  reference subtypes. Raw provider payloads are discarded.
+- `schemaMetadata` embedded in `get_entities` is intentionally discarded;
+  dedicated schema retrieval remains F8.3C3. Related documents, SQL, and view
+  logic are discarded.
+- Metadata remains external/unverified context. There is no risk, run,
+  validation, DeepSeek, or persistence integration.
+
+F8.3C2 does **not** execute `list_schema_fields`, `get_lineage`, `search`,
+`tools/list`, or `initialize`. No schema response parser exists yet. OpenAPI
+production routes remain exactly the six F6 paths.
+
+F8.3C2 does **not** claim live compatibility was verified, that metadata is
+fresh or authentic, that owner/tag/domain correctness was verified, that the
+schema is complete, that the affected column exists, that lineage was
+retrieved, or that risk safety was established.
 
 ## Health vs readiness
 

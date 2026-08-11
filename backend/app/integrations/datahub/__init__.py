@@ -50,6 +50,12 @@ from .entity_schema_contract import (
     serialize_datahub_get_entities_tools_call_request,
     serialize_datahub_list_schema_fields_tools_call_request,
 )
+from .entity_execution import (
+    DataHubDatasetEntityMetadata,
+    DataHubEntityMetadataExecutionError,
+    DataHubEntityMetadataExecutionResult,
+    execute_datahub_get_entities,
+)
 
 __all__ = [
     "DataHubMCPConfig",
@@ -101,4 +107,8 @@ __all__ = [
     "discover_datahub_entity_schema_tool_bundle",
     "serialize_datahub_get_entities_tools_call_request",
     "serialize_datahub_list_schema_fields_tools_call_request",
+    "DataHubDatasetEntityMetadata",
+    "DataHubEntityMetadataExecutionError",
+    "DataHubEntityMetadataExecutionResult",
+    "execute_datahub_get_entities",
 ]
