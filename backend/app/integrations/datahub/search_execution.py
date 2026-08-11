@@ -129,6 +129,10 @@ def _validate_content(result: dict[str, Any]) -> list[dict[str, Any]]:
         text = block["text"]
         if "\x00" in text or len(text) > MAX_TEXT_CHARS:
             raise _error("search_content_too_large")
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            raise _error("unsupported_search_content")
         total_chars += len(text)
         if total_chars > MAX_TEXT_CHARS:
             raise _error("search_content_too_large")
@@ -158,8 +162,12 @@ def _parse_payload(payload: dict[str, Any]) -> tuple[tuple[DataHubDatasetSearchR
     start, count, total, entries = (payload["start"], payload["count"], payload["total"], payload["searchResults"])
     if any(isinstance(value, bool) or not isinstance(value, int) for value in (start, count, total)):
         raise _error("invalid_search_result_payload")
-    if start != 0 or not 0 <= count <= MAX_RESULTS or not 0 <= total <= MAX_TOTAL or total < count or not isinstance(entries, list) or len(entries) > MAX_RESULTS:
+    if not isinstance(entries, list):
         raise _error("invalid_search_result_payload")
+    if start != 0 or not 0 <= count <= MAX_RESULTS or not 0 <= total <= MAX_TOTAL or total < count:
+        raise _error("invalid_search_result_payload")
+    if len(entries) > MAX_RESULTS:
+        raise _error("search_result_too_large")
     if count != len(entries):
         raise _error("search_result_count_mismatch")
     records: list[DataHubDatasetSearchRecord] = []
@@ -180,7 +188,10 @@ def _parse_payload(payload: dict[str, Any]) -> tuple[tuple[DataHubDatasetSearchR
         properties = entity.get("properties")
         if properties is not None and not isinstance(properties, dict):
             raise _error("invalid_search_result_entity")
-        name = _safe_name(properties.get("name") if isinstance(properties, dict) else None)
+        try:
+            name = _safe_name(properties.get("name") if isinstance(properties, dict) else None)
+        except ValueError:
+            raise _error("invalid_search_result_entity") from None
         if not urn.startswith(_DATASET_PREFIX):
             non_dataset += 1
             continue
@@ -195,6 +206,8 @@ def execute_datahub_search(*, config: DataHubMCPConfig, session: DataHubMCPSessi
     if not isinstance(config, DataHubMCPConfig) or not isinstance(session, DataHubMCPSession) or session.endpoint_url != config.endpoint_url or session.protocol_version != DATAHUB_MCP_PROTOCOL_VERSION or not session.tools_supported:
         raise _error("search_execution_context_mismatch")
     if not isinstance(discovery, DataHubReadToolDiscoveryBundle) or not isinstance(argument_plan, DataHubSearchArgumentPlan):
+        raise _error("search_execution_context_mismatch")
+    if isinstance(discovery.next_request_id, bool) or not isinstance(discovery.next_request_id, int) or not 3 <= discovery.next_request_id <= 12:
         raise _error("search_execution_context_mismatch")
     search = next((tool for tool in discovery.catalog.tools if tool.name.value == "search"), None)
     if search is None or search.input_schema_fingerprint != discovery.search_contract.input_schema_fingerprint or argument_plan.input_schema_fingerprint != discovery.search_contract.input_schema_fingerprint:
@@ -216,9 +229,9 @@ def execute_datahub_search(*, config: DataHubMCPConfig, session: DataHubMCPSessi
     is_error = result.get("isError", False)
     if not isinstance(is_error, bool):
         raise _error("invalid_search_tool_result")
-    text_blocks = _validate_content(result)
     if is_error:
         raise _error("search_tool_execution_failed")
+    text_blocks = _validate_content(result)
     payload = _select_payload(result, text_blocks)
     records, start, count, total, non_dataset = _parse_payload(payload)
     return DataHubSearchExecutionResult(request_id=request.id, next_request_id=request.id + 1, search_request_fingerprint=request_fingerprint, input_schema_fingerprint=argument_plan.input_schema_fingerprint, records=records, provider_start=start, provider_count=count, provider_total=total, non_dataset_result_count=non_dataset)
