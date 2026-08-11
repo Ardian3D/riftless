@@ -2276,6 +2276,63 @@ integrate with runs/risk/DeepSeek. F8.3B3 will construct queries
 deterministically from change identifiers and resolve bounded asset
 candidates.
 
+## F8.3B3 DataHub deterministic asset candidate resolution
+
+F8.3B3 performs **deterministic asset candidate resolution**. It consumes the
+normalized F8.3B2 `DataHubSearchExecutionResult` dataset records plus a
+bounded internal `DataHubAssetResolutionSubject` derived from the normalized
+F5.1 change asset identity (`platform`, `database`, `schema`, `name`) and the
+affected column (`source_column`). It is pure resolution logic: it **does not
+call DataHub**, perform any network operation, retrieve entity/schema/lineage
+metadata, use fuzzy/semantic matching, or run a model.
+
+Key guarantees:
+
+- **Search provider order is not resolution authority.** `source_position` is
+  retained only as evidence on a resolved winner and is never used to select a
+  candidate or break a tie.
+- **Candidate platform is an eligibility gate.** A candidate may receive a
+  resolution match only after its DataHub platform (extracted from a safely
+  parsed bounded dataset URN) matches the normalized RIFTLESS subject
+  platform. Wrong-platform and unparseable-platform candidates are ineligible
+  through every match class, including fully-qualified and display-name
+  matches. No platform aliases are inferred (`snowflake != bigquery`,
+  `postgres != postgresql`).
+- The strongest exact deterministic identity wins **only when it is unique**.
+- Ties at the strongest match class are **ambiguous** and are never silently
+  broken by provider order, URN order, position, or randomness.
+- No fuzzy, semantic, or LLM scoring. No embeddings. No timestamps.
+- The `build_datahub_asset_search_query` helper derives the F8.3B1 `/q ` query
+  only from normalized RIFTLESS subject identity, prefers the fully-qualified
+  `database.schema.table` form, and never accepts caller-supplied query text.
+- Safe deterministic normalization is limited to trimming and ASCII case-folding
+  for comparison; candidate dataset names are compared only through bounded
+  URN/display-name exact signals.
+- Confidence is a fixed deterministic classification (`exact`, `high`,
+  `ambiguous`, `none`). Method is a fixed enum
+  (`exact_fully_qualified`, `exact_dataset_name`, `exact_display_name`,
+  `exact_urn_dataset_name`, `ambiguous`, `unresolved`).
+- The `exact` confidence means an exact match across every deterministic
+  RIFTLESS identity dimension available and checked by this resolver
+  (platform + normalized qualified dataset name). It does not verify the
+  DataHub environment, metadata freshness, provenance, authenticity, or
+  absolute identity certainty. The RIFTLESS subject carries no environment
+  dimension; environment tokens in candidate URNs are observed but never
+  compared or claimed.
+- Ambiguous and unresolved outcomes are explicit; they **cannot become a
+  writeback target** and are never mapped to a guessed/default URN.
+
+F8.3B3 does **not** integrate with runs, risk, validation, DeepSeek,
+persistence, or the FastAPI app. OpenAPI production routes remain exactly the
+six F6 paths. There is no `get_entities`, schema, or lineage retrieval yet.
+F8.3C will retrieve bounded entity/schema metadata only after a dataset
+candidate is deterministically resolved.
+
+F8.3B3 does **not** claim live resolution was verified, that provider metadata
+is fresh or authentic, that DataHub search is complete, that an ambiguous
+candidate was resolved, that schema/lineage was retrieved, or that risk safety
+was established.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |

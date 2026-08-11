@@ -17,6 +17,19 @@ from .search_contract import (
     serialize_datahub_search_tools_call_request,
 )
 from .search_execution import DataHubDatasetSearchRecord, DataHubSearchExecutionError, DataHubSearchExecutionResult, execute_datahub_search
+from .asset_resolution import (
+    DataHubAssetCandidateResolution,
+    DataHubAssetResolutionConfidence,
+    DataHubAssetResolutionError,
+    DataHubAssetResolutionMethod,
+    DataHubAssetResolutionStatus,
+    DataHubAssetResolutionSubject,
+    RESOLUTION_VERSION,
+    build_datahub_asset_resolution_subject,
+    build_datahub_asset_search_query,
+    build_datahub_resolved_subject_from_resolution,
+    resolve_datahub_asset_candidate,
+)
 
 __all__ = [
     "DataHubMCPConfig",
@@ -39,4 +52,15 @@ __all__ = [
     "DataHubSearchExecutionError",
     "DataHubSearchExecutionResult",
     "execute_datahub_search",
+    "DataHubAssetCandidateResolution",
+    "DataHubAssetResolutionConfidence",
+    "DataHubAssetResolutionError",
+    "DataHubAssetResolutionMethod",
+    "DataHubAssetResolutionStatus",
+    "DataHubAssetResolutionSubject",
+    "RESOLUTION_VERSION",
+    "build_datahub_asset_resolution_subject",
+    "build_datahub_asset_search_query",
+    "build_datahub_resolved_subject_from_resolution",
+    "resolve_datahub_asset_candidate",
 ]
