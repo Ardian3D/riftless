@@ -80,6 +80,13 @@ from .lineage_contract import (
     serialize_datahub_column_lineage_tools_call_request,
     serialize_datahub_dataset_lineage_tools_call_request,
 )
+from .dataset_lineage_execution import (
+    DataHubDatasetDownstreamSlice,
+    DataHubDatasetLineageExecutionError,
+    DataHubDatasetLineageExecutionResult,
+    DataHubDownstreamObservation,
+    execute_datahub_dataset_lineage,
+)
 
 __all__ = [
     "DataHubMCPConfig",
@@ -155,4 +162,9 @@ __all__ = [
     "discover_datahub_lineage_tool_bundle",
     "serialize_datahub_column_lineage_tools_call_request",
     "serialize_datahub_dataset_lineage_tools_call_request",
+    "DataHubDatasetDownstreamSlice",
+    "DataHubDatasetLineageExecutionError",
+    "DataHubDatasetLineageExecutionResult",
+    "DataHubDownstreamObservation",
+    "execute_datahub_dataset_lineage",
 ]

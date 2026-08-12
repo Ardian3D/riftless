@@ -2486,6 +2486,48 @@ exists, that the graph is complete, that downstream impact was verified,
 that zero lineage means zero consumers, or that column lineage proves
 warehouse behavior.
 
+## F8.3D2 Bounded dataset-level downstream lineage execution
+
+F8.3D2 executes exactly one dataset-level `get_lineage` request from the
+locked F8.3D1 plan, continuing the request-ID chain after F8.3C3. Tests use
+fake transport only; there is no live DataHub request.
+
+Key guarantees:
+
+- Downstream only (`upstream=false`), one hop (`max_hops=1`),
+  `max_results=30`, `offset=0`; no pagination and no column argument.
+- Result parsing is dataset-level only. An empty `searchResults` (which the
+  provider cleaning layer may omit entirely) normalizes to zero observed
+  targets — it never proves zero consumers.
+- Downstream targets may be non-dataset DataHub entities (reusing F8.1
+  lineage semantics), and cross-platform downstream targets are not
+  rejected. Provider ordering has no impact-priority meaning; provider
+  `degree` is observational only.
+- Normalized downstream target evidence uses an immutable internal model
+  that preserves F8.1-compatible lineage semantics (`urn`, entity kind,
+  display name, downstream relation, hop depth). Raw provider entity objects
+  are discarded. F8.3E may later assemble this evidence into final context
+  artifacts.
+- `hasMore` is a provider observation only: `hasMore=false` does not prove
+  full graph completeness, and `hasMore=true` never triggers a second call.
+  Token-budget truncation is preserved as an observation and never triggers
+  a retry or another call.
+- Provider counts (`total`, `offset`, `returned`, `hasMore`,
+  `truncatedDueToTokenBudget`) are preserved as external unverified
+  metadata. The raw provider result is discarded.
+- The result's `next_request_id` equals the F8.3D1 column-lineage request
+  ID, which is reserved for F8.3D3. No column lineage is executed in D2.
+
+F8.3D2 does **not** execute column lineage, `get_lineage_paths_between`,
+`search`, `get_entities`, `list_schema_fields`, `tools/list`, or
+`initialize`. It does not integrate with risk, validation, DeepSeek,
+persistence, or the FastAPI app. OpenAPI production routes remain exactly
+the six F6 paths. There is no writeback.
+
+F8.3D2 does **not** claim that observed lineage is complete, that zero
+lineage means zero consumers, that downstream impact is verified, that
+metadata is fresh or authentic, or that the change is safe.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |
