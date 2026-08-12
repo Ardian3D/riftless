@@ -2528,6 +2528,43 @@ F8.3D2 does **not** claim that observed lineage is complete, that zero
 lineage means zero consumers, that downstream impact is verified, that
 metadata is fresh or authentic, or that the change is safe.
 
+## F8.3D3 Bounded column-level downstream lineage execution
+
+F8.3D3 executes exactly one column-level `get_lineage` request from the locked
+F8.3D1 plan, continuing the request-ID chain after F8.3D2. Tests use fake
+transport only; there is no live DataHub request.
+
+Key guarantees:
+
+- The request includes the exact affected column, `upstream=false`,
+  `max_hops=1`, `max_results=30`, `offset=0`; no pagination, retry, or
+  path-between capability.
+- The provider's compact column response is represented through
+  `lineageColumns` — downstream endpoint observations only. Target column
+  names do not need to equal the source column, and `lineageColumns` do not
+  prove warehouse transformation behavior.
+- Target datasets are bounded dataset identities; cross-platform targets are
+  allowed. Missing or empty `lineageColumns` do not prove no impact.
+- `observed` means at least one bounded downstream endpoint column was
+  observed; `not_observed` means no bounded endpoint column was observed —
+  never that no impact exists.
+- Provider `hasMore`/`truncatedDueToTokenBudget` and `total`/`offset`/
+  `returned` remain external unverified observations only.
+- The normalized evidence tree is deeply immutable; raw provider responses
+  are discarded. F8.3E will assemble the B/C/D evidence after the F8.3D3
+  checkpoint.
+
+F8.3D3 does **not** execute the dataset-lineage plan again,
+`get_lineage_paths_between`, `search`, `get_entities`, `list_schema_fields`,
+`tools/list`, or `initialize`. It does not integrate with risk, validation,
+DeepSeek, persistence, or the FastAPI app. OpenAPI production routes remain
+exactly the six F6 paths. There is no writeback.
+
+F8.3D3 does **not** claim that observed column lineage proves warehouse
+behavior, that zero observed columns mean no downstream column impact, that
+the graph is complete, that metadata is fresh or authentic, or that the
+rename is safe.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |

@@ -87,6 +87,14 @@ from .dataset_lineage_execution import (
     DataHubDownstreamObservation,
     execute_datahub_dataset_lineage,
 )
+from .column_lineage_execution import (
+    DataHubColumnDownstreamTarget,
+    DataHubColumnLineageExecutionError,
+    DataHubColumnLineageExecutionResult,
+    DataHubColumnLineageObservation,
+    DataHubColumnLineageSlice,
+    execute_datahub_column_lineage,
+)
 
 __all__ = [
     "DataHubMCPConfig",
@@ -167,4 +175,10 @@ __all__ = [
     "DataHubDatasetLineageExecutionResult",
     "DataHubDownstreamObservation",
     "execute_datahub_dataset_lineage",
+    "DataHubColumnDownstreamTarget",
+    "DataHubColumnLineageExecutionError",
+    "DataHubColumnLineageExecutionResult",
+    "DataHubColumnLineageObservation",
+    "DataHubColumnLineageSlice",
+    "execute_datahub_column_lineage",
 ]
