@@ -56,6 +56,13 @@ from .entity_execution import (
     DataHubEntityMetadataExecutionResult,
     execute_datahub_get_entities,
 )
+from .schema_execution import (
+    DataHubAffectedFieldObservation,
+    DataHubDatasetSchemaSlice,
+    DataHubSchemaFieldsExecutionError,
+    DataHubSchemaFieldsExecutionResult,
+    execute_datahub_list_schema_fields,
+)
 
 __all__ = [
     "DataHubMCPConfig",
@@ -111,4 +118,9 @@ __all__ = [
     "DataHubEntityMetadataExecutionError",
     "DataHubEntityMetadataExecutionResult",
     "execute_datahub_get_entities",
+    "DataHubAffectedFieldObservation",
+    "DataHubDatasetSchemaSlice",
+    "DataHubSchemaFieldsExecutionError",
+    "DataHubSchemaFieldsExecutionResult",
+    "execute_datahub_list_schema_fields",
 ]

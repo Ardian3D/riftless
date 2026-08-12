@@ -2411,6 +2411,47 @@ fresh or authentic, that owner/tag/domain correctness was verified, that the
 schema is complete, that the affected column exists, that lineage was
 retrieved, or that risk safety was established.
 
+## F8.3C3 Bounded list_schema_fields execution and schema-field normalization
+
+F8.3C3 executes exactly one bounded `list_schema_fields` `tools/call` per
+valid invocation, continuing the request-ID chain after F8.3C2. The request
+comes from the locked F8.3C1 schema plan; the selected dataset is chained
+through the F8.3B3 resolution and F8.3C2 entity-metadata identity checks.
+Tests use fake transport only; there is no live DataHub request.
+
+Key guarantees:
+
+- The request uses one affected-column keyword, `limit: 50`, and `offset: 0`.
+  No pagination is executed.
+- Provider keyword matching/ranking is **not** field-identity authority.
+  RIFTLESS independently performs exact normalized `fieldPath` observation.
+- `observed_exact` means only that the exact normalized affected-column
+  `fieldPath` was observed in this bounded external response. `not_observed`
+  does **not** mean the field is absent from the real schema, does not imply
+  validation failure, and never triggers risk.
+- Provider counts (`totalFields`, `returned`, `remainingCount`,
+  `matchingCount`, `offset`) are preserved as external unverified metadata,
+  not authority. A valid zero-schema provider response may expose
+  `matchingCount` as `null` (allowed only when `totalFields == 0`); the null
+  is preserved faithfully and never rewritten. `matchingCount` is never
+  field-identity or validation authority, and a null `matchingCount` does not
+  mean schema truth or completeness.
+- At most 50 returned schema fields are normalized (field path, native
+  datatype, description, nullable, tags, glossary terms) using the F8.1
+  schema-field model. Raw provider responses are discarded.
+- The schema slice is immutable, carries no `schema_valid` flag, and makes no
+  completeness claim even when `remainingCount == 0`.
+
+F8.3C3 does **not** execute `get_entities`, `get_lineage`, `search`,
+`tools/list`, or `initialize`. It does not integrate with risk, validation,
+DeepSeek, persistence, or the FastAPI app. OpenAPI production routes remain
+exactly the six F6 paths. There is no writeback. F8.3D will add bounded
+lineage retrieval after the F8.3C3 checkpoint.
+
+F8.3C3 does **not** claim field existence was authoritatively verified, that
+schema completeness or DataHub freshness was verified, that the rename was
+validated, or that deployment is safe.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |
