@@ -63,6 +63,23 @@ from .schema_execution import (
     DataHubSchemaFieldsExecutionResult,
     execute_datahub_list_schema_fields,
 )
+from .lineage_contract import (
+    DataHubColumnLineageArgumentPlan,
+    DataHubDatasetLineageArgumentPlan,
+    DataHubGetLineageSchemaContract,
+    DataHubLineageContractError,
+    DataHubLineageContext,
+    DataHubLineageToolDiscoveryBundle,
+    attest_datahub_get_lineage_schema,
+    bind_datahub_lineage_context,
+    build_datahub_column_lineage_argument_plan,
+    build_datahub_column_lineage_tools_call_request,
+    build_datahub_dataset_lineage_argument_plan,
+    build_datahub_dataset_lineage_tools_call_request,
+    discover_datahub_lineage_tool_bundle,
+    serialize_datahub_column_lineage_tools_call_request,
+    serialize_datahub_dataset_lineage_tools_call_request,
+)
 
 __all__ = [
     "DataHubMCPConfig",
@@ -123,4 +140,19 @@ __all__ = [
     "DataHubSchemaFieldsExecutionError",
     "DataHubSchemaFieldsExecutionResult",
     "execute_datahub_list_schema_fields",
+    "DataHubColumnLineageArgumentPlan",
+    "DataHubDatasetLineageArgumentPlan",
+    "DataHubGetLineageSchemaContract",
+    "DataHubLineageContractError",
+    "DataHubLineageContext",
+    "DataHubLineageToolDiscoveryBundle",
+    "attest_datahub_get_lineage_schema",
+    "bind_datahub_lineage_context",
+    "build_datahub_column_lineage_argument_plan",
+    "build_datahub_column_lineage_tools_call_request",
+    "build_datahub_dataset_lineage_argument_plan",
+    "build_datahub_dataset_lineage_tools_call_request",
+    "discover_datahub_lineage_tool_bundle",
+    "serialize_datahub_column_lineage_tools_call_request",
+    "serialize_datahub_dataset_lineage_tools_call_request",
 ]

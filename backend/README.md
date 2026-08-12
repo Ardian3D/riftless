@@ -2452,6 +2452,40 @@ F8.3C3 does **not** claim field existence was authoritatively verified, that
 schema completeness or DataHub freshness was verified, that the rename was
 validated, or that deployment is safe.
 
+## F8.3D1 get_lineage schema attestation and downstream lineage call planning
+
+F8.3D1 attests the runtime `get_lineage` input schema before any future
+execution. The runtime `tools/list` schema remains the authority; raw lineage
+input schemas remain ephemeral and are discarded after attestation.
+
+Key guarantees:
+
+- RIFTLESS plans direct downstream lineage only: exact server-owned values
+  `upstream=false`, `max_hops=1`, `max_results=30`, `offset=0`. No
+  pagination is executed.
+- The dataset-level plan omits `column` entirely; the column-level plan uses
+  the exact normalized affected column. `query` and `filter` are never sent.
+- Two future requests are planned separately: dataset-level downstream
+  lineage and column-level downstream lineage are distinct observations.
+- Column lineage is still planned when the C3 schema slice says
+  `not_observed`: that state means only the exact fieldPath was not observed
+  in the bounded schema response, so it is not authority over lineage
+  planning.
+- Request IDs continue after F8.3C3 (`dataset` = `schema_execution.next_request_id`,
+  `column` = `+1`, next available after both = `+2`).
+- F8.3D1 executes **no** `get_lineage` call and no output parser. F8.3D2 will
+  execute bounded dataset-level downstream lineage; F8.3D3 will execute
+  bounded column-level downstream lineage.
+
+Lineage remains external/unverified context. There is no risk, validation,
+writeback, or app integration. OpenAPI production routes remain exactly the
+six F6 paths.
+
+F8.3D1 does **not** claim live compatibility was verified, that lineage
+exists, that the graph is complete, that downstream impact was verified,
+that zero lineage means zero consumers, or that column lineage proves
+warehouse behavior.
+
 ## Health vs readiness
 
 | Endpoint | Meaning |
